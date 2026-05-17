@@ -4,9 +4,29 @@
 
 ## 프로젝트 개요
 
-**Stock Monitor + LLM Advisor** — 개인용 주식 모니터링 웹 앱. 차트, 공시, 뉴스, 종토방 데이터를 통합하고, 현재 보고 있는 종목의 컨텍스트를 자동으로 LLM에 주입해서 자연스럽게 상담할 수 있게 한다.
+**Stock Monitor + LLM Advisor** — 개인용 주식 모니터링 웹 앱. 차트, 공시, 뉴스, 커뮤니티 데이터를 통합하고, 현재 보고 있는 종목의 컨텍스트를 자동으로 LLM에 주입해서 자연스럽게 상담할 수 있게 한다.
 
-본인 1명이 사용. 자동매매 없음. 한국 주식만 (KOSPI/KOSDAQ).
+본인 1명이 사용. 자동매매 없음.
+
+### 시장 확장 로드맵
+
+- **Phase 1 (현재)**: 한국 주식 (KOSPI/KOSDAQ) — MVP, 인프라/UI/LLM 어셈블러 검증
+- **Phase 2 (예정)**: 미국 주식 (NYSE/NASDAQ) — yfinance, SEC EDGAR, 영문 뉴스/Reddit 추가
+- **Phase 3 이후**: 일본/홍콩, 유럽 (필요 시)
+
+**중요**: Phase 1만 구현하더라도 코드/스키마는 처음부터 멀티마켓을 전제로 설계한다. 종목 식별자, 시간대, 통화, 데이터 소스 추상화를 한국 전용으로 박아두지 말 것. 자세한 규약은 아래 [도메인 지식](#도메인-지식) 참조.
+
+## 현재 진행 상태
+
+- [x] CLAUDE.md 초안 작성
+- [ ] backend 스캐폴딩 (FastAPI, DB, Redis)
+- [ ] DB 스키마 설계 (멀티마켓 전제)
+- [ ] 시세 수집 워커 (한국)
+- [ ] 공시/뉴스 수집 워커 (한국)
+- [ ] LLM 컨텍스트 어셈블러
+- [ ] 프론트엔드 차트/대시보드
+- [ ] 알림 시스템 (텔레그램)
+- [ ] Phase 2: 미국장 데이터 소스 통합
 
 ## 기술 스택
 
@@ -32,10 +52,26 @@
 - `anthropic` Python SDK 사용
 
 ### 외부 데이터
-- pykrx, FinanceDataReader (시세)
-- DART OpenAPI (공시)
-- 네이버 금융 (실시간 시세, 뉴스, 종토방)
-- RSS 피드 (한경, 매경, 연합인포맥스)
+
+#### Phase 1 — 한국 (KR)
+- **시세 (일봉)**: pykrx, FinanceDataReader
+- **시세 (실시간)**: 네이버 금융 모바일 API (비공식)
+- **공시**: DART OpenAPI
+- **뉴스**: 네이버 금융 뉴스, RSS (한경, 매경, 연합인포맥스)
+- **커뮤니티**: 네이버 종토방
+
+#### Phase 2 — 미국 (US, 예정)
+- **시세 (일봉)**: yfinance (무료, 광범위)
+- **시세 (실시간/분봉)**: Finnhub 또는 TwelveData 무료 티어
+- **공시**: SEC EDGAR (무료 공식 API, `sec-edgar-downloader` 등)
+- **뉴스**: Finnhub news, Marketaux, RSS
+- **커뮤니티**: Reddit (PRAW), StockTwits
+
+#### 시장 무관 / 공통
+- **환율**: yfinance (`USDKRW=X`, `JPYKRW=X` 등)
+- **거래소 캘린더**: `pandas_market_calendars` (Phase 2부터)
+
+데이터 소스 어댑터는 `app/services/market/` 하위에 시장별로 분리하고, 상위 서비스는 추상화된 인터페이스에만 의존하게 한다.
 
 ### 인프라
 - 시놀로지 NAS + Docker Compose
@@ -55,11 +91,18 @@ stock-advisor/
 │   │   ├── models/              # SQLAlchemy 모델
 │   │   ├── schemas/             # Pydantic 스키마
 │   │   ├── services/            # 비즈니스 로직
-│   │   │   ├── market.py        # 시세 관련
-│   │   │   ├── disclosure.py    # 공시
+│   │   │   ├── market/          # 시세 (시장별 어댑터)
+│   │   │   │   ├── base.py      # 추상 인터페이스
+│   │   │   │   ├── kr.py        # 한국 (pykrx, 네이버)
+│   │   │   │   └── us.py        # 미국 (yfinance, Phase 2)
+│   │   │   ├── disclosure/      # 공시 (시장별)
+│   │   │   │   ├── base.py
+│   │   │   │   ├── kr.py        # DART
+│   │   │   │   └── us.py        # SEC EDGAR (Phase 2)
 │   │   │   ├── news.py
-│   │   │   ├── board.py         # 종토방
+│   │   │   ├── community.py     # 종토방/Reddit/StockTwits 통합
 │   │   │   ├── llm.py           # LLM 어셈블러
+│   │   │   ├── fx.py            # 환율
 │   │   │   └── alert.py
 │   │   ├── workers/             # 백그라운드 워커
 │   │   │   ├── price_poller.py
@@ -95,7 +138,7 @@ stock-advisor/
 - **Pydantic v2** 스키마로 입출력 검증.
 - **에러 핸들링**: 도메인 예외는 `app/core/exceptions.py`에 정의. FastAPI exception handler에서 일관된 응답.
 - **로깅**: `structlog` 사용. 구조화 JSON 로그. 민감 정보(잔액, 계좌번호) 로깅 금지.
-- **import 순서**: stdlib → 3rd party → app local. isort 기준.
+- **import 순서**: ruff `I` 룰 (isort 호환)로 자동 정렬. stdlib → 3rd party → app local.
 - **포맷**: ruff (line length 100), ruff format
 - **테스트**: pytest + pytest-asyncio. 단위 테스트는 services 위주.
 
@@ -110,6 +153,7 @@ stock-advisor/
 
 ### Git
 
+- **저장소**: Gitea (kovis.synology.me). GitHub 아님 → `gh` CLI 사용 불가, **PR/이슈는 Gitea 웹 UI에서 직접 생성**.
 - **브랜치**: `main` (배포) ← `dev` (통합) ← `feature/*`, `bugfix/*`
 - **커밋 메시지**: Conventional Commits (feat:, fix:, refactor:, chore:, docs:, test:)
 - 한국어 또는 영어 모두 가능, 일관되게.
@@ -123,36 +167,85 @@ stock-advisor/
 
 ## 도메인 지식
 
-### 종목 코드
+### 시간대 규칙 (가장 중요)
 
-- 6자리 숫자 문자열 (예: '005930' 삼성전자)
-- 앞에 0 빼지 말 것. `005930` ≠ `5930`
+- **DB에는 항상 UTC로 저장** (`TIMESTAMPTZ`). naive datetime 금지.
+- **표시할 때만 사용자 시간대(KST)로 변환**. 변환은 프론트엔드 또는 API 직렬화 단계에서.
+- 시장 시간 비교/판단은 **거래소 로컬 시간** 기준 → `zoneinfo` + `pandas_market_calendars` 사용.
+- 미국장 시간대 주의: EST/EDT 서머타임 매년 두 번 바뀜. 직접 계산 X, 캘린더 라이브러리 사용.
 
-### 시장 시간 (KST)
+### 종목 식별자 (멀티마켓 전제)
 
-- 정규장: 09:00 ~ 15:30
-- 시간외: 15:40 ~ 16:00 (단일가), 16:00 ~ 18:00 (시간외 단일가)
-- 종토방, 뉴스는 24시간 수집. 시세는 정규장 기준.
+내부 표준 식별자는 **`{EXCHANGE}:{SYMBOL}`** 형식. 처음부터 이렇게 잡아둠.
+
+- `KR:005930` — 삼성전자 (KOSPI)
+- `KR:035720` — 카카오 (KOSPI)
+- `US:AAPL` — Apple (NASDAQ)
+- `US:BRK.B` — Berkshire Hathaway Class B
+
+규칙:
+- 한국 종목 코드는 6자리 숫자 문자열. 앞에 0 빼지 말 것. `005930` ≠ `5930`.
+- 미국 티커는 대문자, `.` 포함 가능 (`BRK.B`, `BF.B`).
+- 외부 API별 식별자(yfinance의 `005930.KS`, `7203.T` 등)와는 어댑터 내부에서 매핑. 상위 코드는 항상 내부 표준만 사용.
+- DB `instruments` 테이블에 `exchange`, `symbol`, `country`, `currency`, `isin(nullable)` 컬럼을 필수로 포함.
+
+### 시장 시간
+
+거래소별 캘린더는 `pandas_market_calendars`로 일원화. 직접 하드코딩 X.
+
+| 거래소 | 시간대 | 정규장 | 비고 |
+|--------|--------|--------|------|
+| KRX (KOSPI/KOSDAQ) | KST | 09:00 ~ 15:30 | 시간외 단일가: 15:40~16:00, 16:00~18:00 |
+| NYSE | America/New_York | 09:30 ~ 16:00 | 서머타임 있음 |
+| NASDAQ | America/New_York | 09:30 ~ 16:00 | 서머타임 있음 |
+
+- 뉴스/커뮤니티는 24시간 수집.
+- 시세 폴링 주기는 시장별 장중 여부에 따라 조절 (장중 1초, 시간외/휴장 시 폴링 중단 또는 저빈도).
+
+### 통화 / 환율
+
+- 모든 가격은 **원래 통화 그대로 저장** (`price` + `currency` 컬럼).
+- 표시 통화 환산은 조회/표시 시점에. 환산용 환율은 `fx_rates` 테이블에 일자별 저장.
+- 손익 계산: 매수 시점 환율과 평가 시점 환율을 구분해서 환차손익 분리.
+- 환율 소스: yfinance (`USDKRW=X` 등). 일 1회 EOD 갱신.
 
 ### 데이터 소스 주의사항
 
-- **pykrx**: 장 마감 후 일봉 데이터 조회용. 장중 실시간 X.
-- **네이버 금융 모바일 API**: 비공식. 안정적이지만 약관상 회색 지대. 본인용이라 OK.
-- **DART**: 분당 호출 제한 관대. corp_code로 종목코드 매핑 필요.
-- **종토방**: robots.txt 존중. 요청 간 sleep 1초. User-Agent 명시.
+#### 한국 (Phase 1)
+- **pykrx**: 장 마감 후 일봉 데이터 조회용. 장중 실시간 X. 동기 라이브러리 → async 래퍼 필수.
+- **네이버 금융 모바일 API**: 비공식. 안정적이지만 약관상 회색 지대. 본인용이라 OK. 외부 공개/배포 금지.
+- **DART**: 분당 호출 제한 관대. corp_code로 종목코드 매핑 필요. corp_code는 일 1회 갱신.
+- **종토방**: robots.txt 존중. 요청 간 sleep 1초. User-Agent 명시. **글 본문은 DB 외부 노출 금지** (저작권).
+
+#### 미국 (Phase 2, 예정)
+- **yfinance**: 무료지만 비공식 → Yahoo가 막을 가능성 상존. fallback 소스 1개 이상 확보.
+- **SEC EDGAR**: 공식 API, 매우 안정적. User-Agent에 연락처 명시 의무.
+- **Finnhub/TwelveData**: 무료 티어 rate limit (분/일) 엄격. 캐싱 필수.
+- **Reddit (PRAW)**: 인증 필요. 토큰 발급. 글 본문 정책은 종토방과 동일하게 적용 (집계 지표만 LLM에 노출).
 
 ### LLM 컨텍스트 어셈블러
 
-- `app/services/llm.py:assemble_context()` 가 핵심.
-- 호출 시점에 가장 최신 데이터로 컨텍스트 빌드.
+- `app/services/llm.py:assemble_context(instrument_id)`가 핵심 진입점.
+- 호출 시점에 가장 최신 데이터로 컨텍스트 빌드. 캐시 사용 시 TTL ≤ 60초.
 - 컨텍스트 크기 ~1500 토큰 목표. 초과 시 우선순위 낮은 정보부터 truncate.
-- 종토방 글 본문은 절대 컨텍스트에 안 넣음. 집계 지표만.
+- **컨텍스트 우선순위 (높음 → 낮음)**:
+  1. 현재가, 등락률, 거래량
+  2. 당일/최근 공시 헤드라인
+  3. 최근 24h 뉴스 헤드라인 (본문 X, 헤드라인 + 요약만)
+  4. 커뮤니티 감성 집계 지표 (긍정/부정 비율, 글 수 변화)
+  5. 기술적 지표 요약 (이동평균, RSI 등)
+  6. 과거 차트 요약 (1주/1개월 추세)
+- **시장별 컨텍스트 차이**:
+  - 한국: 공시(DART) + 종토방 감성 + 일반 뉴스
+  - 미국 (Phase 2): SEC 파일링(10-K/10-Q/8-K) + earnings call 요약 + Reddit/StockTwits 감성
+- **절대 컨텍스트에 넣지 말 것**: 종토방/Reddit 원문, 사용자 보유 수량/잔액.
 
 ### 알림 룰
 
 - DB에 룰 정의 저장. `alert_runner` 워커가 1분마다 평가.
 - 동일 룰 중복 발화 방지: `last_triggered_at` + cooldown.
 - 알림 채널: 텔레그램. 향후 확장 가능하게 추상화.
+- 시장별 장중 시간에만 발화하는 룰 옵션 (예: 한국장 룰은 KRX 정규장 시간에만).
 
 ## Claude Code 작업 시 지침
 
@@ -169,7 +262,9 @@ stock-advisor/
 - 새 종속성 추가 전에 기존에 비슷한 라이브러리 있는지 확인.
 - 동기 라이브러리(pykrx 등)는 반드시 async 래퍼로 감싸기.
 - 외부 API 호출은 재시도(`tenacity`) + 타임아웃 명시.
-- 시간 처리: DB에는 UTC 저장, 표시할 때 KST 변환.
+- **시간 처리**: DB에는 UTC 저장. 시장 시간 판단은 거래소 로컬 시간, 표시는 KST.
+- **종목 식별자**: 항상 내부 표준 `{EXCHANGE}:{SYMBOL}` 사용. 외부 API 식별자는 어댑터 안에서만.
+- **시장 가정 금지**: "한국이니까", "원화니까" 같은 가정을 코드에 박지 말 것. 시장별 분기가 필요하면 어댑터 패턴으로.
 
 ### 작업 시작 전
 
@@ -188,8 +283,10 @@ stock-advisor/
 
 - 자동매매 관련 코드 작성 금지 (스코프 외).
 - 다른 사용자 계정 가정한 멀티테넌시 설계 금지 (본인용).
-- 종토방 글 본문 자체를 DB 외부로 노출하지 말 것 (저작권/약관).
+- 종토방/Reddit 글 본문 자체를 DB 외부(LLM 컨텍스트, API 응답 등)로 노출하지 말 것 (저작권/약관).
 - 회원가입, 결제, 이메일 인증 등 상용 서비스 기능 만들지 말 것.
+- **Phase 1 단계에서 미국장 데이터 소스 코드까지 미리 구현하지 말 것**. 다만 어댑터 인터페이스(추상 클래스)는 처음부터 분리해서, Phase 2에 구현체만 추가하면 되도록 설계.
+- 한국 전용 가정(6자리 코드, 원화, KST)을 비즈니스 로직/스키마에 박지 말 것. 어댑터/표시 레이어로 밀어낼 것.
 
 ## 자주 쓰는 명령어
 
@@ -234,17 +331,28 @@ docker compose exec backend bash  # 컨테이너 진입
 
 `.env.example` 참조. 주요 항목:
 
+### 공통
 - `DATABASE_URL` — PostgreSQL 연결
 - `REDIS_URL` — Redis 연결
 - `ANTHROPIC_API_KEY` — Claude API
-- `DART_API_KEY` — DART OpenAPI
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — 알림
 - `AUTH_PASSWORD` — 본인용 단순 인증
 - `LOG_LEVEL` — `INFO` (기본), `DEBUG`
+- `ENABLED_MARKETS` — 활성 시장 (예: `KR` 또는 `KR,US`). Phase 2부터 의미 있음.
+
+### 한국 (Phase 1)
+- `DART_API_KEY` — DART OpenAPI
+
+### 미국 (Phase 2, 예정)
+- `FINNHUB_API_KEY` — Finnhub
+- `SEC_EDGAR_USER_AGENT` — SEC 요청용 (이름 + 이메일 의무)
+- `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USER_AGENT` — PRAW
 
 ## 참고 문서
 
-- `docs/architecture.md` — 아키텍처 상세
-- `docs/data-sources.md` — 외부 데이터 소스별 사용법
-- `docs/llm-context.md` — LLM 컨텍스트 어셈블러 규약
-- `docs/decisions/` — ADR (Architecture Decision Records)
+아래 문서들은 **예정**. 작성 전에는 본 CLAUDE.md가 단일 진실의 출처(SSoT).
+
+- `docs/architecture.md` — 아키텍처 상세 (예정)
+- `docs/data-sources.md` — 외부 데이터 소스별 사용법 (예정)
+- `docs/llm-context.md` — LLM 컨텍스트 어셈블러 규약 (예정)
+- `docs/decisions/` — ADR (Architecture Decision Records, 예정)
