@@ -24,7 +24,10 @@
 - [ ] 시세 수집 워커 (한국)
 - [ ] 공시/뉴스 수집 워커 (한국)
 - [ ] LLM 컨텍스트 어셈블러
+- [ ] 종목 발굴 — 스크리닝(조건 검색)
+- [ ] 종목 발굴 — LLM 기반 추천
 - [ ] 프론트엔드 차트/대시보드
+- [ ] 프론트엔드 발굴 후보 UI
 - [ ] 알림 시스템 (텔레그램)
 - [ ] Phase 2: 미국장 데이터 소스 통합
 
@@ -59,6 +62,8 @@
 - **공시**: DART OpenAPI
 - **뉴스**: 네이버 금융 뉴스, RSS (한경, 매경, 연합인포맥스)
 - **커뮤니티**: 네이버 종토방
+- **재무지표/스크리닝**: pykrx (PER/PBR/배당수익률 등 fundamental), FinanceDataReader (StockListing으로 전체 종목 마스터), DART (재무제표 원본)
+- **상장 종목 마스터**: KRX/FinanceDataReader (KOSPI/KOSDAQ 전 종목 리스트, 발굴 대상 풀)
 
 #### Phase 2 — 미국 (US, 예정)
 - **시세 (일봉)**: yfinance (무료, 광범위)
@@ -66,6 +71,8 @@
 - **공시**: SEC EDGAR (무료 공식 API, `sec-edgar-downloader` 등)
 - **뉴스**: Finnhub news, Marketaux, RSS
 - **커뮤니티**: Reddit (PRAW), StockTwits
+- **재무지표/스크리닝**: yfinance `Ticker.info`, Finnhub `/stock/metric`, 또는 Financial Modeling Prep (FMP)
+- **상장 종목 마스터**: NASDAQ/NYSE traded symbols 파일, 또는 Finnhub `/stock/symbol`
 
 #### 시장 무관 / 공통
 - **환율**: yfinance (`USDKRW=X`, `JPYKRW=X` 등)
@@ -103,12 +110,21 @@ stock-advisor/
 │   │   │   ├── community.py     # 종토방/Reddit/StockTwits 통합
 │   │   │   ├── llm.py           # LLM 어셈블러
 │   │   │   ├── fx.py            # 환율
+│   │   │   ├── discovery/       # 종목 발굴
+│   │   │   │   ├── base.py      # Candidate 도메인 모델
+│   │   │   │   ├── screener.py  # 조건 기반 스크리닝
+│   │   │   │   └── llm_suggest.py  # LLM 추천 발굴
+│   │   │   ├── fundamentals/    # 재무지표 (시장별 어댑터)
+│   │   │   │   ├── base.py
+│   │   │   │   ├── kr.py        # pykrx fundamental
+│   │   │   │   └── us.py        # yfinance/Finnhub (Phase 2)
 │   │   │   └── alert.py
 │   │   ├── workers/             # 백그라운드 워커
 │   │   │   ├── price_poller.py
 │   │   │   ├── disclosure_watcher.py
 │   │   │   ├── news_collector.py
 │   │   │   ├── board_crawler.py
+│   │   │   ├── discovery_runner.py  # 스크리닝 주기 실행
 │   │   │   └── alert_runner.py
 │   │   └── llm/                 # LLM 추상화 (향후 다중 LLM 대비)
 │   │       ├── base.py          # 추상 인터페이스
@@ -239,6 +255,53 @@ stock-advisor/
   - 한국: 공시(DART) + 종토방 감성 + 일반 뉴스
   - 미국 (Phase 2): SEC 파일링(10-K/10-Q/8-K) + earnings call 요약 + Reddit/StockTwits 감성
 - **절대 컨텍스트에 넣지 말 것**: 종토방/Reddit 원문, 사용자 보유 수량/잔액.
+
+### 종목 발굴 (Discovery)
+
+관심종목(watchlist)에 아직 없는 종목 중 살펴볼 만한 것을 자동으로 골라내는 기능. **두 가지 발굴 방식**을 모두 지원하되, 결과는 watchlist와 **분리된 별도의 "발굴 후보(candidates)" 리스트**로 관리한다.
+
+#### 발굴 방식
+
+1. **스크리닝 (Screening)** — 사용자 정의 조건 기반 필터
+   - 입력: `{ "market": "KR", "filters": [{"field": "per", "op": "<", "value": 10}, {"field": "op_margin", "op": ">", "value": 0.15}] }` 형태의 조건 정의
+   - 처리: 시장별 fundamentals 어댑터에서 전 종목 지표를 받아 평가
+   - 출력: 조건을 만족하는 종목 리스트
+   - 주기: 일 1회 EOD 배치 또는 수동 트리거. 스크리너 정의는 DB(`screeners` 테이블)에 저장 → 재사용 가능
+
+2. **LLM 추천 (Suggest)** — 현재 관심종목 컨텍스트를 LLM에 주고 유사/관련 종목 추천
+   - 입력: 현재 watchlist + 사용자가 적은 투자 테마/관점 (예: "2차전지 공급망")
+   - 처리: `claude-opus-4-7`에 종목 마스터(이름/섹터/주요 지표) 일부와 함께 질의. **종목 코드만 받아오고**, 추천 사유는 함께 저장
+   - 주기: 수동 트리거 또는 주간 배치
+   - 비용 관리: 종목 마스터 전체를 한 번에 넣으면 토큰 폭발 → 섹터 필터링 등으로 후보군 축소 후 LLM에 전달
+
+#### 후보(candidates) 라이프사이클
+
+```
+[스크리너/LLM] → candidates 테이블 → 사용자 검토 → [승급/폐기/스누즈]
+                                          ├── 승급: watchlist로 이동, 본격 데이터 수집 시작
+                                          ├── 폐기: dismissed 표시 (재발견 시 알림 X)
+                                          └── 스누즈: N일 후 다시 노출
+```
+
+- watchlist와 candidates는 **별도 테이블**. 후보 상태에서는 시세/공시 본격 수집 안 함 (리소스 절약).
+- 동일 종목이 다른 스크리너에서 또 걸려도 중복 발화 안 함 (`source` 컬럼에 누적만).
+- `candidate` 레코드는 발굴 시점 메타데이터 보존: 발굴 소스(어떤 스크리너 / LLM 추천), 발굴 시점 지표 스냅샷, 추천 사유 텍스트.
+
+#### 데이터 모델 요지
+
+- `screeners`: 스크리너 정의 (이름, 조건 JSON, market, 활성 여부)
+- `candidates`: 발굴된 종목 후보 (instrument_id, source, score, reason, discovered_at, status[new/snoozed/promoted/dismissed])
+- `fundamentals_snapshot`: 발굴 시점의 지표 스냅샷 (나중에 "그때 PER이 얼마였더라" 재현용)
+
+#### 시장별 차이
+
+- 한국(Phase 1): pykrx의 fundamental + FinanceDataReader의 StockListing으로 전체 풀 확보
+- 미국(Phase 2): yfinance/Finnhub로 동일 패턴. 단 종목 수가 수천 개 → 1차 필터를 거래소/시총으로 축소
+
+#### 안전장치
+
+- LLM 추천 결과는 **항상 사람 검토 거쳐서 watchlist에 들어감** — 자동 승급 금지. LLM이 환각한 ticker가 직접 추적되는 사고 방지.
+- 발굴된 종목의 상장폐지/거래정지 여부를 fundamentals 어댑터에서 검증 후 후보로 등록.
 
 ### 알림 룰
 
