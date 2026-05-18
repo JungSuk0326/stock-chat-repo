@@ -1,0 +1,45 @@
+from functools import lru_cache
+from typing import Literal
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+Environment = Literal["dev", "prod"]
+LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore",
+    )
+
+    # Runtime
+    ENVIRONMENT: Environment = "dev"
+    LOG_LEVEL: LogLevel = "INFO"
+
+    # Markets — comma-separated. Phase 1: "KR" only. Phase 2: "KR,US".
+    ENABLED_MARKETS: str = "KR"
+
+    # Personal auth (single-user)
+    AUTH_PASSWORD: str = "change-me"
+
+    # Database / Cache (defaults point at local docker-compose services)
+    DATABASE_URL: str = "postgresql+asyncpg://stock:stock@localhost:5432/stock_advisor"
+    REDIS_URL: str = "redis://localhost:6379/0"
+
+    # External APIs — empty string means "not configured"
+    ANTHROPIC_API_KEY: str = ""
+    DART_API_KEY: str = ""
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_CHAT_ID: str = ""
+
+    @property
+    def enabled_markets(self) -> list[str]:
+        return [m.strip().upper() for m in self.ENABLED_MARKETS.split(",") if m.strip()]
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
