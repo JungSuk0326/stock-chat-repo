@@ -2,10 +2,12 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, Response, status
 
 from app.core.config import get_settings
+from app.core.db import engine, ping_db
 from app.core.logging import configure_logging
+from app.core.redis_client import ping_redis, redis_client
 
 settings = get_settings()
 configure_logging(settings.ENVIRONMENT, settings.LOG_LEVEL)
@@ -22,6 +24,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     yield
     log.info("app.shutdown")
+    await engine.dispose()
+    await redis_client.aclose()
 
 
 app = FastAPI(
@@ -32,9 +36,20 @@ app = FastAPI(
 
 
 @app.get("/health")
-async def health() -> dict[str, object]:
+async def health(response: Response) -> dict[str, object]:
+    db_ok = await ping_db()
+    redis_ok = await ping_redis()
+    all_ok = db_ok and redis_ok
+
+    if not all_ok:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
     return {
-        "status": "ok",
+        "status": "ok" if all_ok else "degraded",
         "environment": settings.ENVIRONMENT,
         "enabled_markets": settings.enabled_markets,
+        "checks": {
+            "db": "ok" if db_ok else "fail",
+            "redis": "ok" if redis_ok else "fail",
+        },
     }
