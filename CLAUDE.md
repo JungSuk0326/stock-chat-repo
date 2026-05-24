@@ -413,8 +413,9 @@ docker compose exec backend bash  # 컨테이너 진입
 
 ## 참고 문서
 
-아래 문서들은 **예정**. 작성 전에는 본 CLAUDE.md가 단일 진실의 출처(SSoT).
+아래 문서들 중 (예정) 표시된 건 미작성. 작성된 문서가 우선, 그 외는 CLAUDE.md가 단일 진실의 출처(SSoT).
 
+- [`docs/risks-2026-05-21.md`](docs/risks-2026-05-21.md) — 구현 리스크 & 보완 사항 리뷰 (작성됨, 처리 진행 중)
 - `docs/architecture.md` — 아키텍처 상세 (예정)
 - `docs/data-sources.md` — 외부 데이터 소스별 사용법 (예정)
 - `docs/llm-context.md` — LLM 컨텍스트 어셈블러 규약 (예정)
