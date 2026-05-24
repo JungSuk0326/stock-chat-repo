@@ -145,6 +145,59 @@ stock-advisor/
 └── README.md
 ```
 
+## 워커 토폴로지
+
+백엔드 프로세스는 **두 개로 분리**한다. 같은 코드 저장소, 같은 Docker 이미지, 진입점(`command`)만 다르게 띄움.
+
+### 서비스 구성
+
+| 서비스 | 역할 | 외부 노출 | 인스턴스 수 |
+|--------|------|-----------|-------------|
+| `backend` | FastAPI HTTP/WebSocket (`app.main:app`) | ✓ (Cloudflare Tunnel) | N (stateless, 부하 따라 늘림) |
+| `worker` | APScheduler 기반 배치 (`app/workers/*`) | ✗ | 1 (singleton) |
+
+`docker-compose.yml`에서 `build`는 동일, `command`만 다르게:
+
+```yaml
+backend:
+  build: ./backend
+  command: uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+  ports: ["8000:8000"]
+
+worker:
+  build: ./backend
+  command: uv run python -m app.workers.runner
+  # ports 노출 X — 외부 공격면 차단
+```
+
+### 왜 분리하는가
+
+- `uvicorn --reload` 시 워커 영향 X (개발 사이클 빠름)
+- API 다중 인스턴스 띄워도 워커 스케줄 중복 실행 X
+- 워커 OOM이 API를 죽이지 않음 (사용자 체감 가용성↑)
+- 워커 코드는 외부에서 절대 접근 불가 (공격면 축소)
+
+### Singleton 보장 (실수로 워커 2개 떠도 안전)
+
+워커 컨테이너가 실수로 다중 기동되어도 동일 작업이 두 번 실행되지 않도록 Redis 락으로 보호:
+
+```python
+acquired = await redis.set(f"lock:{job_name}", "1", nx=True, ex=ttl)
+if not acquired:
+    return  # 다른 워커가 처리 중, 이번 tick은 skip
+try:
+    ...  # 실제 작업
+finally:
+    await redis.delete(f"lock:{job_name}")
+```
+
+각 워커는 자기 작업 예상 시간 + 여유로 TTL 설정. 작업 끝나면 명시적 해제.
+
+### 진입점
+
+- `backend/app/main.py` — FastAPI 앱 (이미 존재)
+- `backend/app/workers/runner.py` — APScheduler 부팅 + 모든 워커 job 등록 (백엔드 도메인 코드 작성 시점에 추가)
+
 ## 코딩 규약
 
 ### Python (Backend)
