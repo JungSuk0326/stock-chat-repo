@@ -25,6 +25,7 @@ class Instrument(Base):
     # Metadata
     country: Mapped[str] = mapped_column(String(2), nullable=False)  # ISO 3166-1 alpha-2
     currency: Mapped[str] = mapped_column(String(3), nullable=False)  # ISO 4217
+    market: Mapped[str | None] = mapped_column(String(16), nullable=True)  # e.g. KOSPI, KOSDAQ, NYSE
     isin: Mapped[str | None] = mapped_column(String(12), nullable=True, unique=True)
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
 

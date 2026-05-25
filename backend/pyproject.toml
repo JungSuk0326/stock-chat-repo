@@ -12,6 +12,8 @@ dependencies = [
     "asyncpg>=0.31.0",
     "redis>=5.0",
     "alembic>=1.18.4",
+    "pykrx>=1.2.8",
+    "finance-datareader>=0.9.202",
 ]
 
 [project.optional-dependencies]
