@@ -3,7 +3,9 @@ from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI, Response, status
+from fastapi.middleware.cors import CORSMiddleware
 
+from app.api import prices as prices_api
 from app.core.config import get_settings
 from app.core.db import engine, ping_db
 from app.core.logging import configure_logging
@@ -33,6 +35,21 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Local frontend (Next.js dev server) is the only browser origin for now.
+# Cloudflare Tunnel deploy will pass through that domain via reverse proxy,
+# not directly to the browser → no extra CORS needed at deploy time.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
+
+app.include_router(prices_api.router)
 
 
 @app.get("/health")
