@@ -30,6 +30,7 @@ from app.core.db import SessionLocal
 from app.core.logging import configure_logging
 from app.core.redis_client import redis_client
 from app.models import WatchlistEntry
+from app.services.instruments import sync_kr_instruments
 from app.services.market.kr import KrMarketAdapter
 from app.services.prices import sync_eod_prices, sync_eod_watchlist
 from app.workers.price_poller import PricePoller
@@ -172,6 +173,18 @@ async def main() -> None:
         coalesce=True,
         max_instances=1,
         misfire_grace_time=3600,  # if worker was down at 16:00, still run within 1h
+    )
+
+    # Daily instrument-master refresh at 06:00 KST (well before market open).
+    # Catches new listings and name changes. Idempotent UPSERT.
+    scheduler.add_job(
+        sync_kr_instruments,
+        CronTrigger(hour=6, minute=0, timezone="Asia/Seoul"),
+        args=[kr_adapter],
+        id="instruments_sync_daily",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
     )
 
     scheduler.start()
