@@ -4,9 +4,9 @@
 
 ## 프로젝트 개요
 
-**Stock Monitor + LLM Advisor** — 개인용 주식 모니터링 웹 앱. 차트, 공시, 뉴스, 커뮤니티 데이터를 통합하고, 현재 보고 있는 종목의 컨텍스트를 자동으로 LLM에 주입해서 자연스럽게 상담할 수 있게 한다.
+**Stock Monitor + LLM Advisor** — 개인용 주식 모니터링 웹 앱. **실시간 시세** + 차트 + 공시 + 뉴스 + 커뮤니티 데이터를 통합하고, 현재 보고 있는 종목의 컨텍스트를 자동으로 LLM에 주입해서 자연스럽게 상담할 수 있게 한다. 단타 분석/스윙도 가능한 호흡으로 시세를 본다.
 
-본인 1명이 사용. 자동매매 없음.
+본인 1명이 사용. **자동 주문 실행 없음** (시세 모니터링과 LLM 상담만, 매매 결정은 본인이).
 
 ### 시장 확장 로드맵
 
@@ -41,7 +41,10 @@
 - [x] `KrMarketAdapter.fetch_instruments()` — FDR로 KOSPI/KOSDAQ 2,649개 적재
 - [x] `KrMarketAdapter.fetch_eod_prices()` — pykrx로 일봉 OHLCV (삼성전자 1년치 검증)
 - [x] `app/scripts/sync_instruments.py`, `sync_prices.py` 수동 실행 스크립트
-- [ ] APScheduler 워커로 자동화 (현재는 placeholder runner만)
+- [ ] **실시간 시세 워커 — 2초 폴링, Redis 캐시/Pub-Sub, 1분봉 적재** (진행 중)
+- [ ] WebSocket `/ws/prices/{exchange}/{symbol}` 엔드포인트
+- [ ] 프론트엔드 WebSocket 클라이언트 + 차트 라이브 업데이트
+- [ ] APScheduler 워커 자동화 (EOD, instruments 갱신, 헬스체크 등)
 - [ ] DART 공시 수집 + corp_code 동기화
 - [ ] 네이버 금융 뉴스 + RSS 수집
 - [ ] 종토방 크롤링 + 감성 분류 (claude-haiku)
@@ -81,10 +84,11 @@
 - httpx (외부 API 호출, async)
 
 ### Frontend
-- Next.js 15 (App Router) / React 19
+- Next.js 16 (App Router, Turbopack) / React 19
 - TypeScript (strict mode)
-- Tailwind CSS
-- Lightweight Charts (TradingView)
+- Tailwind CSS v4
+- Lightweight Charts (TradingView) v5
+- 실시간 시세: 브라우저 WebSocket → `/ws/prices/{exchange}/{symbol}`
 - Zustand (상태관리)
 
 ### LLM
@@ -330,6 +334,67 @@ finally:
 - **SEC EDGAR**: 공식 API, 매우 안정적. User-Agent에 연락처 명시 의무.
 - **Finnhub/TwelveData**: 무료 티어 rate limit (분/일) 엄격. 캐싱 필수.
 - **Reddit (PRAW)**: 인증 필요. 토큰 발급. 글 본문 정책은 종토방과 동일하게 적용 (집계 지표만 LLM에 노출).
+
+### 실시간 시세 흐름 (KR)
+
+목표: 장중 시세를 ~2초 단위로 모니터링하고, 차트가 페이지 새로고침 없이 움직인다. 단타 분석/스윙 의사결정 보조용.
+
+#### 데이터 경로
+
+```
+[Naver Mobile API]                                                       
+    ↓ (장중 2초마다 polling)                                              
+[worker: price_poller]                                                  
+    │                                                                    
+    ├─→ Redis SET  "price:{EXCHANGE}:{SYMBOL}"   TTL 60s   (현재가 캐시) 
+    ├─→ Redis PUB  "ticks.{EXCHANGE}.{SYMBOL}"            (실시간 fan-out)
+    └─→ 분 경계마다 INSERT prices(interval='1m', ...)      (히스토리 영속)
+                                                                          
+                          ┌──── Redis SUBSCRIBE                          
+                          │                                              
+[FastAPI WebSocket]  ──── ┘                                              
+GET /ws/prices/{exchange}/{symbol}                                       
+    ↓ (서버 → 브라우저 push)                                              
+[Browser]  ─── chart.update(tick)                                        
+```
+
+#### 명명 규약
+
+- Redis 키 (캐시): `price:{EXCHANGE}:{SYMBOL}` (예: `price:KR:005930`)
+  - 값: JSON `{"close": ..., "volume_cum": ..., "ts": "..."}`
+  - TTL 60초 — 워커 죽으면 자동 만료
+- Redis 채널 (Pub/Sub): `ticks.{EXCHANGE}.{SYMBOL}` (예: `ticks.KR.005930`)
+- WebSocket 경로: `/ws/prices/{exchange}/{symbol}` (예: `/ws/prices/KR/005930`)
+
+#### 폴링 주기 & 시장 시간
+
+- **KR 정규장 (09:00~15:30 KST)**: 2초 (실시간 체감 + Naver IP 차단 위험 낮춤)
+- **시간외/휴장**: 폴링 중단 (Naver API 부하 + 약관 회색지대 줄임)
+- 시장 시간 판단: 일단 `zoneinfo` + 요일/시간 단순 판단. 정확한 휴장(R15)은 `pandas_market_calendars` 또는 KRX 휴장 API로 추후 보강.
+
+#### 1분봉 집계
+
+워커가 2초마다 tick을 메모리 버퍼에 누적 → 분 경계 도달 시 OHLCV로 집계 → `prices(interval='1m')` UPSERT.
+
+- `open` = 분의 첫 tick close
+- `high` = 분 내 max
+- `low` = 분 내 min
+- `close` = 분의 마지막 tick close
+- `volume` = (분 끝 누적거래량) - (분 시작 누적거래량). Naver API는 누적 거래량 반환.
+
+#### Singleton 보장
+
+워커 컨테이너가 실수로 다중 기동되어도 한 종목당 하나만 폴링하도록 Redis 락:
+```
+SET "lock:poller:{EXCHANGE}:{SYMBOL}" "<worker-id>" NX EX 5
+```
+TTL 5초로 짧게 — 폴링 간격(2초)보다 길고, 워커 죽으면 곧 만료. 안전한 fail-over.
+
+#### 절대 하지 말 것
+
+- tick 단위 영속화 (양 폭발, 가치 낮음). 1분봉 이하 해상도는 메모리 버퍼만.
+- 종토방/뉴스를 같은 채널로 발행 (도메인 분리, 각자 채널).
+- 워커가 죽으면 silent. 헬스 메트릭(R1) 마련 시 success rate 추적.
 
 ### LLM 컨텍스트 어셈블러
 
