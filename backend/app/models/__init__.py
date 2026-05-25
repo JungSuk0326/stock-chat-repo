@@ -7,5 +7,6 @@ which is what Alembic's autogenerate inspects.
 from app.models.base import Base
 from app.models.instrument import Instrument
 from app.models.price import Price
+from app.models.watchlist import WatchlistEntry
 
-__all__ = ["Base", "Instrument", "Price"]
+__all__ = ["Base", "Instrument", "Price", "WatchlistEntry"]
