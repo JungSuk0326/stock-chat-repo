@@ -18,7 +18,7 @@
 
 ## 현재 진행 상태
 
-마지막 갱신: 2026-05-25 (Task 2-1 — 신규 watchlist 종목 EOD 자동 backfill까지)
+마지막 갱신: 2026-05-25 (Task 2-2 — 매일 16:00 KST EOD 자동 sync까지)
 
 ### 기반 구조
 - [x] CLAUDE.md 초안 + 멀티마켓/발굴 섹션 + Skill routing
@@ -48,7 +48,7 @@
 - [x] **다종목 watchlist** — DB watchlist 테이블 + CRUD API + 동적 워커 (30s sync, add/remove auto)
 - [x] **종목 검색 + URL 라우팅** — `?symbol=KR:000660`, 사이드바 + SearchModal
 - [x] **신규 watchlist 종목 자동 EOD backfill** — reconcile 시점에 1년치 일봉 fire-and-forget
-- [ ] 매일 EOD 일봉 sync — 16:00 KST, watchlist 전체 (Task 2 계속)
+- [x] **매일 EOD 일봉 sync** — 16:00 KST cron, watchlist 전체 종목 최근 7일 (멱등 UPSERT)
 - [ ] 매일 instruments 갱신 — 06:00 KST
 - [ ] DART corp_code 동기화 (R11)
 - [ ] 헬스체크 메트릭 (R1)

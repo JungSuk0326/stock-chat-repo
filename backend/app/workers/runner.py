@@ -21,6 +21,7 @@ from datetime import date, timedelta
 
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
@@ -30,7 +31,7 @@ from app.core.logging import configure_logging
 from app.core.redis_client import redis_client
 from app.models import WatchlistEntry
 from app.services.market.kr import KrMarketAdapter
-from app.services.prices import sync_eod_prices
+from app.services.prices import sync_eod_prices, sync_eod_watchlist
 from app.workers.price_poller import PricePoller
 
 log = structlog.get_logger()
@@ -38,6 +39,7 @@ log = structlog.get_logger()
 POLL_INTERVAL_SECONDS = 2
 WATCHLIST_SYNC_INTERVAL_SECONDS = 30
 BACKFILL_DAYS = 365
+EOD_SYNC_LOOKBACK_DAYS = 7
 
 
 def _poller_job_id(exchange: str, symbol: str) -> str:
@@ -157,6 +159,19 @@ async def main() -> None:
         id="watchlist_sync",
         coalesce=True,
         max_instances=1,
+    )
+
+    # Daily EOD sync at 16:00 KST (KOSPI closes 15:30; +30min buffer for pykrx).
+    # Last `EOD_SYNC_LOOKBACK_DAYS` days are re-pulled for every watchlist
+    # symbol. Idempotent UPSERT, so catching up after worker downtime is free.
+    scheduler.add_job(
+        sync_eod_watchlist,
+        CronTrigger(hour=16, minute=0, timezone="Asia/Seoul"),
+        args=[kr_adapter, EOD_SYNC_LOOKBACK_DAYS],
+        id="eod_sync_daily",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,  # if worker was down at 16:00, still run within 1h
     )
 
     scheduler.start()
