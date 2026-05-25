@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from datetime import date, datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
@@ -18,6 +20,21 @@ class InstrumentData(BaseModel):
     isin: str | None = Field(default=None, min_length=12, max_length=12)
 
 
+class PriceData(BaseModel):
+    """Adapter-level OHLCV bar.
+
+    `time` is the bar's identifying timestamp in UTC. For daily bars, the
+    convention is midnight UTC of the trading date.
+    """
+
+    time: datetime
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: int
+
+
 class MarketAdapter(ABC):
     """Per-market data source adapter.
 
@@ -31,4 +48,17 @@ class MarketAdapter(ABC):
     @abstractmethod
     async def fetch_instruments(self) -> Sequence[InstrumentData]:
         """Return the full tradable instrument master for this market."""
+        ...
+
+    @abstractmethod
+    async def fetch_eod_prices(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+    ) -> Sequence[PriceData]:
+        """Return daily OHLCV bars for `symbol` between [start, end] inclusive.
+
+        Empty Sequence if no trading days in range.
+        """
         ...
