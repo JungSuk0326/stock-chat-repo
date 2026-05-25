@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 
 import {
   type InstrumentSummary,
@@ -143,10 +144,16 @@ function SearchModal({
   onClose: () => void;
   onPick: (inst: InstrumentSummary) => void;
 }) {
+  const [mounted, setMounted] = useState(false);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<InstrumentSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string>("");
+
+  // SSR-safe portal: only render after mount when `document` exists.
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     const q = query.trim();
@@ -178,9 +185,13 @@ function SearchModal({
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
 
-  return (
+  if (!mounted) return null;
+
+  // Portal escapes any ancestor stacking context (sticky sidebar, chart canvas
+  // z-index, etc.) so the modal reliably overlays everything.
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 pt-24"
+      className="fixed inset-0 z-[1000] flex items-start justify-center bg-black/40 p-4 pt-24"
       onClick={onClose}
     >
       <div
@@ -194,7 +205,7 @@ function SearchModal({
             placeholder="종목명 또는 코드로 검색 (예: 삼성, 005930)"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="w-full rounded border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+            className="w-full rounded border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-blue-400 focus:outline-none"
           />
         </div>
         <div className="max-h-96 overflow-y-auto">
@@ -231,6 +242,7 @@ function SearchModal({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

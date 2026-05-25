@@ -12,12 +12,11 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+/* Light theme only. The stock chart UI relies on consistent light surfaces
+ * (white chart background, gray-50 page). OS-level dark mode caused inputs
+ * and other elements that inherit body color to render in light-gray text
+ * over white surfaces, making them illegible. Re-enable when we add a real
+ * theme toggle. */
 
 body {
   background: var(--background);
