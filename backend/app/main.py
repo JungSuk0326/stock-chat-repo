@@ -5,7 +5,9 @@ import structlog
 from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api import instruments as instruments_api
 from app.api import prices as prices_api
+from app.api import watchlist as watchlist_api
 from app.api import ws_prices as ws_prices_api
 from app.core.config import get_settings
 from app.core.db import engine, ping_db
@@ -46,12 +48,14 @@ app.add_middleware(
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     ],
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST", "DELETE", "PATCH"],
     allow_headers=["*"],
 )
 
 app.include_router(prices_api.router)
 app.include_router(ws_prices_api.router)
+app.include_router(instruments_api.router)
+app.include_router(watchlist_api.router)
 
 
 @app.get("/health")
