@@ -1,0 +1,30 @@
+# Python virtual environment (host-built, won't work in linux container)
+.venv/
+venv/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Tool caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Coverage / build artefacts
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local env (NEVER include real secrets in image)
+.env
+.env.local
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store

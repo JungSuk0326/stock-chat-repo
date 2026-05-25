@@ -31,6 +31,43 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # FastAPI HTTP/WebSocket server. Stateless, externally exposed.
+  backend:
+    build: ./backend
+    container_name: stock-backend
+    env_file: backend/.env
+    # Override host-only DB/Redis URLs with compose-internal hostnames.
+    # Local dev (uvicorn from host) still uses backend/.env's localhost values.
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # APScheduler-based background worker. Internal only, singleton.
+  # Same image as backend, different entrypoint per docs/risks R4 decision.
+  worker:
+    build: ./backend
+    container_name: stock-worker
+    command: ["python", "-m", "app.workers.runner"]
+    env_file: backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    # No ports exposed — worker has zero external attack surface.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   pgdata:
   redisdata:
