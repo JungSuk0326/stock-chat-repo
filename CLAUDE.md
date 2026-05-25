@@ -18,18 +18,57 @@
 
 ## 현재 진행 상태
 
-- [x] CLAUDE.md 초안 작성
-- [ ] backend 스캐폴딩 (FastAPI, DB, Redis)
-- [ ] DB 스키마 설계 (멀티마켓 전제)
-- [ ] 시세 수집 워커 (한국)
-- [ ] 공시/뉴스 수집 워커 (한국)
-- [ ] LLM 컨텍스트 어셈블러
-- [ ] 종목 발굴 — 스크리닝(조건 검색)
+마지막 갱신: 2026-05-25
+
+### 기반 구조
+- [x] CLAUDE.md 초안 + 멀티마켓/발굴 섹션 + Skill routing
+- [x] 인프라 컨테이너 — PostgreSQL 16 + TimescaleDB + Redis (docker-compose)
+- [x] backend 스캐폴딩 — FastAPI, pydantic-settings, structlog, lifespan
+- [x] SQLAlchemy 2.0 async + asyncpg + redis-py 연결, `/health`에 의존성 ping
+- [x] backend/worker Docker 이미지 + compose 통합 (R4 결정 + 코드 반영)
+- [x] Alembic async 셋업 + 마이그레이션 워크플로우
+- [x] 리스크 리뷰 문서화 ([docs/risks-2026-05-21.md](docs/risks-2026-05-21.md), 16개 항목 추적)
+
+### DB 스키마 (멀티마켓 전제)
+- [x] `instruments` 테이블 — exchange/symbol/country/currency/market/isin/name
+- [x] `prices` hypertable — TimescaleDB 7d chunk + 30d 이후 자동 압축
+- [ ] `disclosures` 테이블 (공시)
+- [ ] `news_items`, `community_signals` 테이블
+- [ ] `screeners`, `candidates`, `fundamentals_snapshot` 테이블 (발굴)
+- [ ] `alerts`, `alert_rules` 테이블
+
+### KR 데이터 수집 (Phase 1)
+- [x] `KrMarketAdapter.fetch_instruments()` — FDR로 KOSPI/KOSDAQ 2,649개 적재
+- [x] `KrMarketAdapter.fetch_eod_prices()` — pykrx로 일봉 OHLCV (삼성전자 1년치 검증)
+- [x] `app/scripts/sync_instruments.py`, `sync_prices.py` 수동 실행 스크립트
+- [ ] APScheduler 워커로 자동화 (현재는 placeholder runner만)
+- [ ] DART 공시 수집 + corp_code 동기화
+- [ ] 네이버 금융 뉴스 + RSS 수집
+- [ ] 종토방 크롤링 + 감성 분류 (claude-haiku)
+
+### API / UI
+- [x] `GET /prices/{exchange}/{symbol}` + CORS
+- [x] 프론트엔드 첫 차트 — Next.js 16 + lightweight-charts (삼성전자 1년 일봉)
+- [ ] `GET /instruments` 검색 엔드포인트
+- [ ] 종목 선택 드롭다운 / 대시보드
+- [ ] 발굴 후보 UI
+- [ ] LLM 상담 UI (현재 보고 있는 종목 컨텍스트 자동 주입)
+
+### LLM
+- [ ] `app/services/llm.py:assemble_context(instrument_id)` 어셈블러
+- [ ] LLM 비용 hard cap (R2 — Anthropic 첫 호출 직전 필수)
+- [ ] 종목 발굴 — 조건 스크리닝
 - [ ] 종목 발굴 — LLM 기반 추천
-- [ ] 프론트엔드 차트/대시보드
-- [ ] 프론트엔드 발굴 후보 UI
+
+### 운영 / 보안 / 배포
 - [ ] 알림 시스템 (텔레그램)
-- [ ] Phase 2: 미국장 데이터 소스 통합
+- [ ] Cloudflare Access 인증 (R3 — 외부 배포 직전 필수)
+- [ ] DB 백업 자동화 — pg_dump 일 1회 + 주 1회 오프사이트 (R5)
+- [ ] 시놀로지 NAS 배포
+
+### Phase 2 이상
+- [ ] 미국장 데이터 소스 통합 (yfinance, SEC EDGAR, Finnhub)
+- [ ] 일본/홍콩/유럽 (필요 시)
 
 ## 기술 스택
 
