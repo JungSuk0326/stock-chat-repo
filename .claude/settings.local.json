@@ -3,7 +3,26 @@
     "allow": [
       "Bash(docker compose *)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(uv add *)",
+      "Bash(xargs -r kill -9)",
+      "Bash(uv run *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://127.0.0.1:8000/health)",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s -w \"\\\\n[HTTP %{http_code}]\\\\n\" http://127.0.0.1:8000/health)",
+      "Bash(open -a Docker)",
+      "Bash(docker info *)",
+      "Bash(curl -s -w \"\\\\n[HTTP %{http_code}]\\\\n\" http://localhost:8000/health)",
+      "Bash(git commit -m 'docs: R4\\(워커 토폴로지\\) + R8\\(TimescaleDB 설정\\) 처리됨으로 갱신 *)",
+      "Bash(cd /Users/jungsuk/repository_SideProjects/stock-chat-repo/backend && uv run python -m app.scripts.sync_prices --symbol 005930 --start 2026-01-01 --end 2026-05-22 2>&1 | tail -3 && echo \"\" && echo \"=== 재실행 후 총 카운트 \\(변동 없어야 함\\) ===\" && cd .. && docker compose exec -T postgres psql -U stock -d stock_advisor -c \"SELECT COUNT\\(*\\) FROM prices p JOIN instruments i ON p.instrument_id = i.id WHERE i.symbol = '005930';\")",
+      "Read(//Users/jungsuk/repository_SideProjects/**)",
+      "Bash(curl -s \"http://127.0.0.1:8000/prices/KR/005930?days=10\")",
+      "Bash(curl -s \"http://127.0.0.1:8000/prices/KR/005930?days=365\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'bars: {len\\(d[\\\\\"bars\\\\\"]\\)}'\\)\")",
+      "Bash(curl -s -w \"\\\\n[HTTP %{http_code}]\\\\n\" \"http://127.0.0.1:8000/prices/KR/999999?days=10\")",
+      "Bash(pnpm --version)",
+      "Bash(npm install *)",
+      "Bash(pnpm create *)"
     ]
   }
 }

@@ -1,4 +1,19 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(pnpm add *)",
+      "Bash(pnpm dev *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000/)",
+      "Bash(git check-ignore *)",
+      "Bash(echo \"\\($? = exit code: 0=ignored, 1=not ignored\\)\")",
+      "Bash(git commit -m ' *)",
+      "Bash(curl -s \"https://m.stock.naver.com/api/stock/005930/basic\" -H \"User-Agent: Mozilla/5.0\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(k, '=', repr\\(v\\)[:80]\\) for k,v in d.items\\(\\) if 'volume' in k.lower\\(\\) or 'price' in k.lower\\(\\) or 'trad' in k.lower\\(\\) or k in \\('marketStatus','localTradedAt'\\)]\")",
+      "Bash(curl -s \"https://m.stock.naver.com/api/stock/005930/integration\" -H \"User-Agent: Mozilla/5.0\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(k, '=', repr\\(v\\)[:80]\\) for k,v in d.items\\(\\)]\")",
+      "Bash(curl -s \"https://m.stock.naver.com/api/stock/005930/price\" -H \"User-Agent: Mozilla/5.0\")"
+    ]
+  },
   "enabledPlugins": {
     "superpowers@claude-plugins-official": true
   }
