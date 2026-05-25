@@ -4,12 +4,32 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import FinanceDataReader as fdr
+import httpx
 import structlog
 from pykrx import stock as pykrx_stock
 
-from app.services.market.base import InstrumentData, MarketAdapter, PriceData
+from app.services.market.base import (
+    InstrumentData,
+    MarketAdapter,
+    PriceData,
+    RealtimePrice,
+)
 
 log = structlog.get_logger()
+
+# Naver Mobile API (비공식). 본인용 단일 사용자 한정으로 사용.
+_NAVER_REALTIME_URL = "https://m.stock.naver.com/api/stock/{symbol}/price"
+_NAVER_HEADERS = {"User-Agent": "Mozilla/5.0 (stock-advisor private)"}
+
+
+def _parse_won(s: str | None) -> Decimal | None:
+    """Parse "292,500" → Decimal(292500). Return None if blank/invalid."""
+    if not s:
+        return None
+    try:
+        return Decimal(s.replace(",", "").strip())
+    except Exception:
+        return None
 
 
 class KrMarketAdapter(MarketAdapter):
@@ -17,9 +37,17 @@ class KrMarketAdapter(MarketAdapter):
 
     - Instrument master: FinanceDataReader (one bulk call → entire KRX listing)
     - EOD prices: pykrx (KRX page backend, one call per (ticker, range))
+    - Realtime: Naver Mobile API (unofficial, throttle to ≥2s per call)
     """
 
     market_code = "KR"
+
+    def __init__(self, http_client: httpx.AsyncClient | None = None) -> None:
+        # Caller may inject a long-lived client (preferred for pollers).
+        self._http = http_client or httpx.AsyncClient(
+            timeout=httpx.Timeout(5.0, connect=2.0),
+            headers=_NAVER_HEADERS,
+        )
 
     async def fetch_instruments(self) -> Sequence[InstrumentData]:
         # fdr.StockListing is a synchronous HTTP call. Wrap with to_thread.
@@ -123,3 +151,45 @@ class KrMarketAdapter(MarketAdapter):
             end=todate,
         )
         return out
+
+    async def fetch_realtime_price(self, symbol: str) -> RealtimePrice | None:
+        url = _NAVER_REALTIME_URL.format(symbol=symbol)
+        try:
+            response = await self._http.get(url)
+            response.raise_for_status()
+            payload = response.json()
+        except httpx.HTTPError as exc:
+            log.warning("kr.realtime.http_error", symbol=symbol, error=str(exc))
+            return None
+        except ValueError as exc:
+            log.warning("kr.realtime.parse_error", symbol=symbol, error=str(exc))
+            return None
+
+        # /price returns a list (most-recent trading day first). [0] = current.
+        if not isinstance(payload, list) or not payload:
+            log.warning("kr.realtime.empty_payload", symbol=symbol)
+            return None
+        head = payload[0]
+
+        close = _parse_won(head.get("closePrice"))
+        volume_cum = head.get("accumulatedTradingVolume")
+        if close is None or volume_cum is None:
+            log.warning("kr.realtime.missing_fields", symbol=symbol, head=head)
+            return None
+
+        # `localTradedAt` is date-only in the /price endpoint — no minute-level
+        # information. The tick's effective timestamp is when we received the
+        # response (UTC). The bar aggregation uses this for minute boundaries.
+        ts_utc = datetime.now(tz=timezone.utc)
+
+        return RealtimePrice(
+            ts=ts_utc,
+            close=close,
+            open=_parse_won(head.get("openPrice")),
+            high=_parse_won(head.get("highPrice")),
+            low=_parse_won(head.get("lowPrice")),
+            volume_cum=int(volume_cum),
+        )
+
+    async def aclose(self) -> None:
+        await self._http.aclose()

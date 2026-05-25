@@ -35,6 +35,22 @@ class PriceData(BaseModel):
     volume: int
 
 
+class RealtimePrice(BaseModel):
+    """Current snapshot for live polling. Returned by the realtime endpoint.
+
+    `volume_cum` is the cumulative trading volume for the current trading day,
+    not the volume since the last tick. Per-minute bar volume is computed as
+    (this minute's last cum) - (this minute's first cum) by the caller.
+    """
+
+    ts: datetime  # server-reported trade timestamp (UTC)
+    close: Decimal
+    open: Decimal | None = None
+    high: Decimal | None = None
+    low: Decimal | None = None
+    volume_cum: int
+
+
 class MarketAdapter(ABC):
     """Per-market data source adapter.
 
@@ -60,5 +76,14 @@ class MarketAdapter(ABC):
         """Return daily OHLCV bars for `symbol` between [start, end] inclusive.
 
         Empty Sequence if no trading days in range.
+        """
+        ...
+
+    @abstractmethod
+    async def fetch_realtime_price(self, symbol: str) -> RealtimePrice | None:
+        """Return current price snapshot for `symbol`.
+
+        None on transient failure (network, rate limit, parse) — caller is
+        expected to skip the tick and try again.
         """
         ...

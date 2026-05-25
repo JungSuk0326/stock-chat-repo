@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     # Markets — comma-separated. Phase 1: "KR" only. Phase 2: "KR,US".
     ENABLED_MARKETS: str = "KR"
 
+    # Dev escape hatch: ignore market-hours check in the price poller so it polls
+    # 24/7. Set to true only for local smoke testing. Never enable in prod —
+    # the Naver Mobile API serves stale closes off-hours.
+    ALLOW_OFF_HOURS_POLLING: bool = False
+
     # Personal auth (single-user)
     AUTH_PASSWORD: str = "change-me"
 
