@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
+from datetime import date, timedelta
 
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -29,16 +30,39 @@ from app.core.logging import configure_logging
 from app.core.redis_client import redis_client
 from app.models import WatchlistEntry
 from app.services.market.kr import KrMarketAdapter
+from app.services.prices import sync_eod_prices
 from app.workers.price_poller import PricePoller
 
 log = structlog.get_logger()
 
 POLL_INTERVAL_SECONDS = 2
 WATCHLIST_SYNC_INTERVAL_SECONDS = 30
+BACKFILL_DAYS = 365
 
 
 def _poller_job_id(exchange: str, symbol: str) -> str:
     return f"price_poller_{exchange}_{symbol}"
+
+
+async def backfill_eod(adapter: KrMarketAdapter, exchange: str, symbol: str) -> None:
+    """1-year EOD backfill for a single instrument.
+
+    Fire-and-forget by `reconcile_watchlist` whenever a new symbol joins the
+    watchlist. UPSERT-idempotent — repeated runs are safe.
+    """
+    end = date.today()
+    start = end - timedelta(days=BACKFILL_DAYS)
+    log.info("worker.backfill_started", exchange=exchange, symbol=symbol, days=BACKFILL_DAYS)
+    try:
+        count = await sync_eod_prices(adapter, exchange, symbol, start, end)
+        log.info("worker.backfill_done", exchange=exchange, symbol=symbol, bars=count)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "worker.backfill_failed",
+            exchange=exchange,
+            symbol=symbol,
+            error=str(exc),
+        )
 
 
 async def main() -> None:
@@ -111,6 +135,13 @@ async def main() -> None:
                 misfire_grace_time=POLL_INTERVAL_SECONDS,
             )
             log.info("worker.poller_added", exchange=exchange, symbol=symbol)
+            # Fire-and-forget EOD backfill so newly-watched symbols get their
+            # 1-year history without manual sync_prices invocation.
+            # Idempotent (UPSERT) — safe even if data already exists.
+            asyncio.create_task(
+                backfill_eod(kr_adapter, exchange, symbol),
+                name=f"backfill_{exchange}_{symbol}",
+            )
 
     # Run reconcile once immediately so the initial state is correct without
     # waiting WATCHLIST_SYNC_INTERVAL_SECONDS for the first scheduled run.

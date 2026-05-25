@@ -18,7 +18,7 @@
 
 ## 현재 진행 상태
 
-마지막 갱신: 2026-05-25 (Task 1 — DB watchlist + 동적 워커 + 종목 전환 UI 완료)
+마지막 갱신: 2026-05-25 (Task 2-1 — 신규 watchlist 종목 EOD 자동 backfill까지)
 
 ### 기반 구조
 - [x] CLAUDE.md 초안 + 멀티마켓/발굴 섹션 + Skill routing
@@ -47,7 +47,11 @@
 - [x] 프론트엔드 라이브 차트 — WS 자동 재연결(지수 백오프) + 오늘 봉 실시간 업데이트 + LIVE/재연결 중 뱃지
 - [x] **다종목 watchlist** — DB watchlist 테이블 + CRUD API + 동적 워커 (30s sync, add/remove auto)
 - [x] **종목 검색 + URL 라우팅** — `?symbol=KR:000660`, 사이드바 + SearchModal
-- [ ] APScheduler 추가 자동화 — EOD 일봉 16:00 KST, instruments 일 1회 갱신, 헬스체크 등
+- [x] **신규 watchlist 종목 자동 EOD backfill** — reconcile 시점에 1년치 일봉 fire-and-forget
+- [ ] 매일 EOD 일봉 sync — 16:00 KST, watchlist 전체 (Task 2 계속)
+- [ ] 매일 instruments 갱신 — 06:00 KST
+- [ ] DART corp_code 동기화 (R11)
+- [ ] 헬스체크 메트릭 (R1)
 - [ ] DART 공시 수집 + corp_code 동기화
 - [ ] 네이버 금융 뉴스 + RSS 수집
 - [ ] 종토방 크롤링 + 감성 분류 (claude-haiku)
