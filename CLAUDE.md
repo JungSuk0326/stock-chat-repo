@@ -18,7 +18,7 @@
 
 ## 현재 진행 상태
 
-마지막 갱신: 2026-05-25 (Phase 3 라이브 차트까지 완료)
+마지막 갱신: 2026-05-25 (Task 1 — DB watchlist + 동적 워커 + 종목 전환 UI 완료)
 
 ### 기반 구조
 - [x] CLAUDE.md 초안 + 멀티마켓/발굴 섹션 + Skill routing
@@ -32,6 +32,7 @@
 ### DB 스키마 (멀티마켓 전제)
 - [x] `instruments` 테이블 — exchange/symbol/country/currency/market/isin/name
 - [x] `prices` hypertable — TimescaleDB 7d chunk + 30d 이후 자동 압축
+- [x] `watchlist` 테이블 — 사용자 관심종목 (단일 사용자, UNIQUE instrument_id)
 - [ ] `disclosures` 테이블 (공시)
 - [ ] `news_items`, `community_signals` 테이블
 - [ ] `screeners`, `candidates`, `fundamentals_snapshot` 테이블 (발굴)
@@ -39,13 +40,14 @@
 
 ### KR 데이터 수집 (Phase 1)
 - [x] `KrMarketAdapter.fetch_instruments()` — FDR로 KOSPI/KOSDAQ 2,649개 적재
-- [x] `KrMarketAdapter.fetch_eod_prices()` — pykrx로 일봉 OHLCV (삼성전자 1년치 검증)
+- [x] `KrMarketAdapter.fetch_eod_prices()` — pykrx로 일봉 OHLCV
 - [x] `app/scripts/sync_instruments.py`, `sync_prices.py` 수동 실행 스크립트
-- [x] **실시간 시세 워커** — 2초 폴링, Redis 캐시/Pub-Sub, 1분봉 적재 (삼성전자)
-- [x] **WebSocket** `/ws/prices/{exchange}/{symbol}` (4404 close code, 자동 cleanup)
-- [x] **프론트엔드 라이브 차트** — WebSocket 클라이언트 + 자동 재연결(지수 백오프) + 오늘 봉 실시간 업데이트 + LIVE/재연결 중 뱃지
-- [ ] 종목 선택 / 다종목 watchlist (현재는 삼성전자 하드코딩)
-- [ ] APScheduler 자동화 — EOD 일봉, instruments 일 1회 갱신, 헬스체크 등
+- [x] 실시간 시세 워커 — 2초 폴링, Redis 캐시/Pub-Sub, 1분봉 적재
+- [x] WebSocket `/ws/prices/{exchange}/{symbol}` (4404 close code, 자동 cleanup)
+- [x] 프론트엔드 라이브 차트 — WS 자동 재연결(지수 백오프) + 오늘 봉 실시간 업데이트 + LIVE/재연결 중 뱃지
+- [x] **다종목 watchlist** — DB watchlist 테이블 + CRUD API + 동적 워커 (30s sync, add/remove auto)
+- [x] **종목 검색 + URL 라우팅** — `?symbol=KR:000660`, 사이드바 + SearchModal
+- [ ] APScheduler 추가 자동화 — EOD 일봉 16:00 KST, instruments 일 1회 갱신, 헬스체크 등
 - [ ] DART 공시 수집 + corp_code 동기화
 - [ ] 네이버 금융 뉴스 + RSS 수집
 - [ ] 종토방 크롤링 + 감성 분류 (claude-haiku)
@@ -53,10 +55,11 @@
 ### API / UI
 - [x] `GET /prices/{exchange}/{symbol}` + CORS
 - [x] `GET /ws/prices/{exchange}/{symbol}` WebSocket (Redis Pub/Sub fan-out)
-- [x] 프론트엔드 첫 차트 — Next.js 16 + lightweight-charts (삼성전자 1년 일봉)
+- [x] `GET /instruments?q=...&market=...&limit=20` 검색
+- [x] `GET/POST/DELETE /watchlist` CRUD
+- [x] 프론트엔드 첫 차트 — Next.js 16 + lightweight-charts
 - [x] 프론트엔드 실시간 연동 — 라이브 뱃지, 자동 재연결, tick→오늘 봉 업데이트
-- [ ] `GET /instruments` 검색 엔드포인트
-- [ ] 종목 선택 드롭다운 / 대시보드
+- [x] 프론트엔드 watchlist 사이드바 + 검색 모달 + URL 라우팅(`?symbol=...`)
 - [ ] 발굴 후보 UI
 - [ ] LLM 상담 UI (현재 보고 있는 종목 컨텍스트 자동 주입)
 
