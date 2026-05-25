@@ -6,6 +6,7 @@ from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import prices as prices_api
+from app.api import ws_prices as ws_prices_api
 from app.core.config import get_settings
 from app.core.db import engine, ping_db
 from app.core.logging import configure_logging
@@ -50,6 +51,7 @@ app.add_middleware(
 )
 
 app.include_router(prices_api.router)
+app.include_router(ws_prices_api.router)
 
 
 @app.get("/health")
