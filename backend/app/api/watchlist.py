@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import date, timedelta
+
+import structlog
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -6,8 +9,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db
 from app.models import Instrument, WatchlistEntry
 from app.schemas.watchlist import AddToWatchlistRequest, WatchlistItem
+from app.services.market.kr import KrMarketAdapter
+from app.services.prices import sync_eod_prices
+
+log = structlog.get_logger()
 
 router = APIRouter(prefix="/watchlist", tags=["watchlist"])
+
+BACKFILL_DAYS = 365
+
+
+def _kr_adapter(request: Request) -> KrMarketAdapter:
+    """Lifespan-managed shared adapter (one httpx client per backend process)."""
+    return request.app.state.kr_adapter
 
 
 @router.get("", response_model=list[WatchlistItem])
@@ -29,6 +43,7 @@ async def list_watchlist(db: AsyncSession = Depends(get_db)) -> list[WatchlistIt
 async def add_to_watchlist(
     body: AddToWatchlistRequest,
     db: AsyncSession = Depends(get_db),
+    kr_adapter: KrMarketAdapter = Depends(_kr_adapter),
 ) -> WatchlistItem:
     exchange = body.exchange.upper().strip()
     symbol = body.symbol.strip()
@@ -59,6 +74,24 @@ async def add_to_watchlist(
             detail=f"Already in watchlist: {exchange}:{symbol}",
         )
     await db.refresh(entry, attribute_names=["instrument"])
+
+    # Synchronous backfill so the user lands on a populated chart immediately.
+    # ~200-500ms extra to the POST response, but eliminates the 30s wait for the
+    # worker's reconcile loop. UPSERT-idempotent — the worker will harmlessly
+    # re-run the same backfill on its next reconcile.
+    if exchange == "KR":
+        try:
+            end = date.today()
+            start = end - timedelta(days=BACKFILL_DAYS)
+            await sync_eod_prices(kr_adapter, exchange, symbol, start, end)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "watchlist.immediate_backfill_failed",
+                exchange=exchange,
+                symbol=symbol,
+                error=str(exc),
+            )
+
     return WatchlistItem.model_validate(entry)
 
 

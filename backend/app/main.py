@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.core.db import engine, ping_db
 from app.core.logging import configure_logging
 from app.core.redis_client import ping_redis, redis_client
+from app.services.market.kr import KrMarketAdapter
 
 settings = get_settings()
 configure_logging(settings.ENVIRONMENT, settings.LOG_LEVEL)
@@ -27,8 +28,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         log_level=settings.LOG_LEVEL,
         enabled_markets=settings.enabled_markets,
     )
+    # Shared external-API client. Used by POST /watchlist for immediate backfill
+    # so the user lands on a populated chart instead of waiting for the worker's
+    # 30s reconcile cycle.
+    app.state.kr_adapter = KrMarketAdapter()
     yield
     log.info("app.shutdown")
+    await app.state.kr_adapter.aclose()
     await engine.dispose()
     await redis_client.aclose()
 
