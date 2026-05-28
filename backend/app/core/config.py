@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
 
+    # LLM
+    LLM_MODEL: str = "claude-opus-4-7"
+    LLM_DAILY_TOKEN_CAP: int = 100_000      # ~50-100 calls for a typical chat
+    LLM_MONTHLY_TOKEN_CAP: int = 2_000_000  # ~30 daily × 30 days × buffer
+    LLM_MAX_OUTPUT_TOKENS: int = 2048       # cap per response
+
     @property
     def enabled_markets(self) -> list[str]:
         return [m.strip().upper() for m in self.ENABLED_MARKETS.split(",") if m.strip()]

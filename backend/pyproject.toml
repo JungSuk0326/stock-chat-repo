@@ -16,6 +16,7 @@ dependencies = [
     "finance-datareader>=0.9.202",
     "apscheduler>=3.11.2",
     "httpx>=0.28.1",
+    "anthropic>=0.104.1",
 ]
 
 [project.optional-dependencies]
