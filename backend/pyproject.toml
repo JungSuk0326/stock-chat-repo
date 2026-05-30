@@ -17,6 +17,7 @@ dependencies = [
     "apscheduler>=3.11.2",
     "httpx>=0.28.1",
     "anthropic>=0.104.1",
+    "google-genai>=2.7.0",
 ]
 
 [project.optional-dependencies]

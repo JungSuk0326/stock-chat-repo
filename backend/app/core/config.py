@@ -36,14 +36,18 @@ class Settings(BaseSettings):
 
     # External APIs — empty string means "not configured"
     ANTHROPIC_API_KEY: str = ""
+    GEMINI_API_KEY: str = ""
     DART_API_KEY: str = ""
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
 
     # LLM
-    LLM_MODEL: str = "claude-opus-4-7"
-    LLM_DAILY_TOKEN_CAP: int = 100_000      # ~50-100 calls for a typical chat
-    LLM_MONTHLY_TOKEN_CAP: int = 2_000_000  # ~30 daily × 30 days × buffer
+    # Default provider/model when the client doesn't specify one. Catalog
+    # filters by which keys are set (no key → not offered to the UI).
+    LLM_DEFAULT_PROVIDER: str = "gemini"
+    LLM_DEFAULT_MODEL: str = "gemini-2.5-pro"
+    LLM_DAILY_TOKEN_CAP: int = 100_000      # combined across all providers
+    LLM_MONTHLY_TOKEN_CAP: int = 2_000_000  # combined across all providers
     LLM_MAX_OUTPUT_TOKENS: int = 2048       # cap per response
 
     @property

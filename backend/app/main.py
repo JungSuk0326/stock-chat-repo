@@ -5,7 +5,9 @@ import structlog
 from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api import chat as chat_api
 from app.api import instruments as instruments_api
+from app.api import llm as llm_api
 from app.api import prices as prices_api
 from app.api import watchlist as watchlist_api
 from app.api import ws_prices as ws_prices_api
@@ -13,8 +15,8 @@ from app.core.config import get_settings
 from app.core.db import engine, ping_db
 from app.core.logging import configure_logging
 from app.core.redis_client import ping_redis, redis_client
-from app.llm.anthropic import AnthropicClient
 from app.llm.budget import LLMBudget
+from app.llm.registry import LLMRegistry
 from app.services.market.kr import KrMarketAdapter
 
 settings = get_settings()
@@ -35,21 +37,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 30s reconcile cycle.
     app.state.kr_adapter = KrMarketAdapter()
 
-    # Shared LLM client. Budget enforces hard daily + monthly token caps (R2).
+    # Shared LLM registry. Budget enforces combined daily + monthly token caps
+    # across all providers (R2). Registry boots clients only for providers
+    # whose API key is set in .env.
     app.state.llm_budget = LLMBudget(
         redis=redis_client,
         daily_limit=settings.LLM_DAILY_TOKEN_CAP,
         monthly_limit=settings.LLM_MONTHLY_TOKEN_CAP,
     )
-    app.state.llm = AnthropicClient(
-        api_key=settings.ANTHROPIC_API_KEY,
-        model=settings.LLM_MODEL,
-        budget=app.state.llm_budget,
-        max_output_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
-    )
+    app.state.llm_registry = LLMRegistry.from_settings(settings, app.state.llm_budget)
     yield
     log.info("app.shutdown")
-    await app.state.llm.aclose()
+    await app.state.llm_registry.aclose()
     await app.state.kr_adapter.aclose()
     await engine.dispose()
     await redis_client.aclose()
@@ -78,6 +77,8 @@ app.include_router(prices_api.router)
 app.include_router(ws_prices_api.router)
 app.include_router(instruments_api.router)
 app.include_router(watchlist_api.router)
+app.include_router(chat_api.router)
+app.include_router(llm_api.router)
 
 
 @app.get("/health")
