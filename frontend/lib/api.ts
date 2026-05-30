@@ -50,6 +50,48 @@ export interface Tick {
   volume_cum: number;
 }
 
+export interface LLMModelInfo {
+  provider: string;
+  model_id: string;
+  display_name: string;
+  tier: string;
+  key: string; // "{provider}:{model_id}"
+}
+
+export interface LLMModelsResponse {
+  models: LLMModelInfo[];
+  default: {
+    provider: string;
+    model_id: string;
+    key: string;
+    available: boolean;
+  };
+}
+
+export interface ChatTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface ChatRequest {
+  exchange: string;
+  symbol: string;
+  question: string;
+  history: ChatTurn[];
+  provider?: string;
+  model?: string;
+}
+
+export interface ChatResponse {
+  answer: string;
+  instrument: string;
+  provider: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  context_preview: string;
+}
+
 // ---------- Fetch helpers ----------
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
@@ -140,4 +182,17 @@ export function getPrices(args: {
 export function wsPriceUrl(exchange: string, symbol: string): string {
   const base = API_URL.replace(/^http/, "ws");
   return `${base}/ws/prices/${exchange}/${symbol}`;
+}
+
+// ---------- LLM ----------
+
+export function getLLMModels(): Promise<LLMModelsResponse> {
+  return http<LLMModelsResponse>("/llm/models");
+}
+
+export function chat(body: ChatRequest): Promise<ChatResponse> {
+  return http<ChatResponse>("/chat", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }

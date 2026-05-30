@@ -3,6 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useMemo } from "react";
 
+import { ChatPanel } from "@/components/ChatPanel";
 import { PriceChart } from "@/components/PriceChart";
 import { WatchlistPanel } from "@/components/WatchlistPanel";
 
@@ -33,7 +34,7 @@ function PageBody() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <div className="mx-auto flex max-w-7xl gap-6 p-6">
+      <div className="mx-auto flex max-w-[1800px] gap-6 p-6">
         <div className="w-64 shrink-0">
           <div className="sticky top-6 rounded-lg bg-white p-4 shadow">
             <WatchlistPanel
@@ -60,11 +61,21 @@ function PageBody() {
           </header>
 
           <PriceChart
-            key={`${selected.exchange}:${selected.symbol}`}
+            key={`chart:${selected.exchange}:${selected.symbol}`}
             exchange={selected.exchange}
             symbol={selected.symbol}
           />
         </main>
+
+        <aside className="w-[420px] shrink-0">
+          <div className="sticky top-6">
+            <ChatPanel
+              key={`chat:${selected.exchange}:${selected.symbol}`}
+              exchange={selected.exchange}
+              symbol={selected.symbol}
+            />
+          </div>
+        </aside>
       </div>
     </div>
   );

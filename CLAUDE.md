@@ -18,7 +18,7 @@
 
 ## 현재 진행 상태
 
-마지막 갱신: 2026-05-25 (Task 2-3 — 매일 06:00 KST instruments 자동 갱신까지)
+마지막 갱신: 2026-05-30 (Task Top1 — LLM 상담 (multi-provider, 모델 선택 UI)까지)
 
 ### 기반 구조
 - [x] CLAUDE.md 초안 + 멀티마켓/발굴 섹션 + Skill routing
@@ -64,14 +64,20 @@
 - [x] 프론트엔드 첫 차트 — Next.js 16 + lightweight-charts
 - [x] 프론트엔드 실시간 연동 — 라이브 뱃지, 자동 재연결, tick→오늘 봉 업데이트
 - [x] 프론트엔드 watchlist 사이드바 + 검색 모달 + URL 라우팅(`?symbol=...`)
+- [x] **LLM 상담 UI** — ChatPanel 컴포넌트, 모델 드롭다운, localStorage 모델 선택 유지, 종목 전환 시 히스토리 reset
+- [x] `GET /llm/models` — 카탈로그 (provider 키 있는 모델만 노출) + default 정보
+- [x] `POST /chat` — provider/model 선택, 컨텍스트 자동 주입
 - [ ] 발굴 후보 UI
-- [ ] LLM 상담 UI (현재 보고 있는 종목 컨텍스트 자동 주입)
 
 ### LLM
-- [ ] `app/services/llm.py:assemble_context(instrument_id)` 어셈블러
-- [ ] LLM 비용 hard cap (R2 — Anthropic 첫 호출 직전 필수)
+- [x] **LLM 비용 hard cap (R2)** — Redis 기반 daily/monthly 통합 카운터, provider 무관
+- [x] **`assemble_context()` 어셈블러** — 현재가/추세/MA/RSI 자동 빌드 (~160 토큰)
+- [x] **Multi-provider 추상화** — `LLMClient` ABC + `LLMRegistry` + `catalog` 정적 모델 목록
+- [x] **Anthropic + Gemini 지원** — Claude Opus/Haiku 4.5/4.7, Gemini 2.5 Pro/Flash (4종)
+- [x] **provider/model 사용자 선택** — UI 드롭다운, 호출마다 클라이언트가 선택
 - [ ] 종목 발굴 — 조건 스크리닝
 - [ ] 종목 발굴 — LLM 기반 추천
+- [ ] 공시·뉴스·종토방 감성을 컨텍스트 어셈블러에 합류 (도메인 데이터 도입 후)
 
 ### 운영 / 보안 / 배포
 - [ ] 알림 시스템 (텔레그램)
@@ -102,10 +108,16 @@
 - Zustand (상태관리)
 
 ### LLM
-- Anthropic Claude API
-- 메인: `claude-opus-4-7` (상담, 복잡한 분석)
-- 경량: `claude-haiku-4-5` (종토방 감성 분류 등 배치)
-- `anthropic` Python SDK 사용
+
+Multi-provider 구조. `LLMClient` ABC 뒤에 각 provider 구현을 두고, `LLMRegistry`가 키가 설정된 provider만 부팅한다. 사용자가 `/llm/models` 카탈로그에서 모델을 골라 `/chat` 호출 시 `provider/model` 필드로 전달.
+
+- **현재 카탈로그** (`app/llm/catalog.py`):
+  - Anthropic: `claude-opus-4-7` (premium), `claude-haiku-4-5` (lite) — `anthropic` SDK
+  - Gemini: `gemini-2.5-pro` (premium), `gemini-2.5-flash` (standard) — `google-genai` SDK
+- **기본값**: `LLM_DEFAULT_PROVIDER=gemini`, `LLM_DEFAULT_MODEL=gemini-2.5-pro` (.env로 조정 가능)
+- **공통 비용 cap (R2)**: `LLMBudget`이 Redis로 daily/monthly 토큰을 **provider 통합**으로 누적. 초과 시 호출 전 `LLMBudgetExceeded` raise → 429.
+- **확장**: 새 provider 추가 시 `LLMClient` 상속 구현체 + `catalog.py`에 한 줄 + `registry.from_settings()` 분기 한 줄. UI/스키마 변경 불필요.
+- **BYOK 미래**: 단일 사용자 기준 operator 키만 .env에 두지만, 패턴은 그대로 두면 user_id 차원 추가 + TTL 캐시만으로 BYOK로 확장 가능.
 
 ### 외부 데이터
 
@@ -564,7 +576,11 @@ docker compose exec backend bash  # 컨테이너 진입
 ### 공통
 - `DATABASE_URL` — PostgreSQL 연결
 - `REDIS_URL` — Redis 연결
-- `ANTHROPIC_API_KEY` — Claude API
+- `ANTHROPIC_API_KEY` — Anthropic Claude API (비워두면 카탈로그에서 자동 제외)
+- `GEMINI_API_KEY` — Google Gemini API (비워두면 카탈로그에서 자동 제외)
+- `LLM_DEFAULT_PROVIDER`, `LLM_DEFAULT_MODEL` — 클라이언트가 미지정 시 사용할 기본값
+- `LLM_DAILY_TOKEN_CAP`, `LLM_MONTHLY_TOKEN_CAP` — provider 통합 토큰 한도 (R2)
+- `LLM_MAX_OUTPUT_TOKENS` — 응답 1회당 출력 토큰 cap
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — 알림
 - `AUTH_PASSWORD` — 본인용 단순 인증
 - `LOG_LEVEL` — `INFO` (기본), `DEBUG`
