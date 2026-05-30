@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import signal
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -30,10 +31,18 @@ from app.core.db import SessionLocal
 from app.core.logging import configure_logging
 from app.core.redis_client import redis_client
 from app.models import WatchlistEntry
+from app.services.disclosure.kr import DartAdapter
+from app.services.disclosures import (
+    sync_corp_codes,
+    sync_disclosures_for_symbol,
+    sync_disclosures_watchlist,
+)
 from app.services.instruments import sync_kr_instruments
 from app.services.market.kr import KrMarketAdapter
 from app.services.prices import sync_eod_prices, sync_eod_watchlist
 from app.workers.price_poller import PricePoller
+
+_KST = ZoneInfo("Asia/Seoul")
 
 log = structlog.get_logger()
 
@@ -41,6 +50,12 @@ POLL_INTERVAL_SECONDS = 2
 WATCHLIST_SYNC_INTERVAL_SECONDS = 30
 BACKFILL_DAYS = 365
 EOD_SYNC_LOOKBACK_DAYS = 7
+
+# Disclosure worker timings
+DISCLOSURE_POLL_INTERVAL_SECONDS = 60
+DISCLOSURE_BACKFILL_DAYS = 180          # 6 months
+DISCLOSURE_POLL_LOOKBACK_DAYS = 2       # today + yesterday — covers post-midnight crossover
+                                        # and brief worker downtime in one shot
 
 
 def _poller_job_id(exchange: str, symbol: str) -> str:
@@ -68,6 +83,71 @@ async def backfill_eod(adapter: KrMarketAdapter, exchange: str, symbol: str) -> 
         )
 
 
+def _kst_today() -> date:
+    """KST-local date — DART date filters are KST."""
+    return datetime.now(_KST).date()
+
+
+async def backfill_disclosures(
+    adapter: DartAdapter, exchange: str, symbol: str
+) -> None:
+    """6-month disclosure backfill for a single instrument.
+
+    Fire-and-forget by reconcile_watchlist on new symbols. Silent no-op when
+    DART_API_KEY isn't configured. Idempotent.
+    """
+    if not adapter.configured:
+        return
+    end = _kst_today()
+    start = end - timedelta(days=DISCLOSURE_BACKFILL_DAYS)
+    log.info(
+        "worker.disclosure_backfill_started",
+        exchange=exchange,
+        symbol=symbol,
+        days=DISCLOSURE_BACKFILL_DAYS,
+    )
+    try:
+        count = await sync_disclosures_for_symbol(
+            adapter,
+            exchange=exchange,
+            symbol=symbol,
+            start=start,
+            end=end,
+        )
+        log.info(
+            "worker.disclosure_backfill_done",
+            exchange=exchange,
+            symbol=symbol,
+            new=count,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "worker.disclosure_backfill_failed",
+            exchange=exchange,
+            symbol=symbol,
+            error=str(exc),
+        )
+
+
+async def disclosure_poll_tick(adapter: DartAdapter) -> None:
+    """Per-minute disclosure poll across the entire KR watchlist.
+
+    Date range = [today-1, today] KST so post-midnight crossings and brief
+    worker downtime are covered without needing a high-water-mark.
+    UNIQUE(source, source_id) handles dedup in the DB.
+    """
+    if not adapter.configured:
+        return
+    end = _kst_today()
+    start = end - timedelta(days=DISCLOSURE_POLL_LOOKBACK_DAYS - 1)
+    try:
+        new = await sync_disclosures_watchlist(adapter, start=start, end=end)
+        if new:
+            log.info("worker.disclosure_poll.new", new=new)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("worker.disclosure_poll.failed", error=str(exc))
+
+
 async def main() -> None:
     settings = get_settings()
     configure_logging(settings.ENVIRONMENT, settings.LOG_LEVEL)
@@ -83,6 +163,17 @@ async def main() -> None:
     # One adapter (= one http client) shared across pollers in this process.
     # TODO Phase 2 (multi-market): one adapter per exchange (kr/us/...).
     kr_adapter = KrMarketAdapter()
+
+    # DART disclosure adapter. Silent no-op when DART_API_KEY isn't set, so
+    # the worker still boots cleanly on a fresh install.
+    dart_adapter = DartAdapter(api_key=settings.DART_API_KEY)
+    if dart_adapter.configured:
+        log.info("worker.dart.configured")
+    else:
+        log.warning(
+            "worker.dart.no_api_key",
+            note="set DART_API_KEY in .env to enable disclosure ingestion",
+        )
 
     # Active pollers, keyed by canonical id "EX:SYM".
     pollers: dict[str, PricePoller] = {}
@@ -145,6 +236,12 @@ async def main() -> None:
                 backfill_eod(kr_adapter, exchange, symbol),
                 name=f"backfill_{exchange}_{symbol}",
             )
+            # Same pattern for disclosures (6 months). Independent task so a
+            # slow DART backfill doesn't block the price poller from starting.
+            asyncio.create_task(
+                backfill_disclosures(dart_adapter, exchange, symbol),
+                name=f"backfill_disclosures_{exchange}_{symbol}",
+            )
 
     # Run reconcile once immediately so the initial state is correct without
     # waiting WATCHLIST_SYNC_INTERVAL_SECONDS for the first scheduled run.
@@ -187,6 +284,32 @@ async def main() -> None:
         misfire_grace_time=3600,
     )
 
+    # Daily DART corp_code refresh at 05:30 KST (R11). Runs before the
+    # 06:00 instrument sync so any newly listed firms can be mapped right
+    # away. Silent no-op if DART_API_KEY isn't configured.
+    if dart_adapter.configured:
+        scheduler.add_job(
+            sync_corp_codes,
+            CronTrigger(hour=5, minute=30, timezone="Asia/Seoul"),
+            args=[dart_adapter],
+            id="dart_corp_code_sync_daily",
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+        )
+        # Per-minute disclosure poll across the watchlist. Date range is
+        # [today-1, today] KST inside the tick — see disclosure_poll_tick.
+        scheduler.add_job(
+            disclosure_poll_tick,
+            "interval",
+            seconds=DISCLOSURE_POLL_INTERVAL_SECONDS,
+            args=[dart_adapter],
+            id="disclosure_poll",
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=DISCLOSURE_POLL_INTERVAL_SECONDS,
+        )
+
     scheduler.start()
 
     # Wait for SIGINT/SIGTERM so docker compose stop is graceful.
@@ -200,6 +323,7 @@ async def main() -> None:
 
     scheduler.shutdown(wait=False)
     await kr_adapter.aclose()
+    await dart_adapter.aclose()
     await redis_client.aclose()
 
 
