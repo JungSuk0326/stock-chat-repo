@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   type FormEvent,
   useCallback,
@@ -10,10 +11,15 @@ import {
 } from "react";
 
 import {
+  type ChatSessionSummary,
   type ChatTurn,
   type LLMModelInfo,
   chat,
+  createChatSession,
+  deleteChatSession,
+  getChatSession,
   getLLMModels,
+  listChatSessions,
 } from "@/lib/api";
 
 interface Props {
@@ -23,25 +29,70 @@ interface Props {
 
 const MODEL_STORAGE_KEY = "stock-advisor:llm-model";
 
+const TIME_FORMATTER = new Intl.DateTimeFormat("ko-KR", {
+  timeZone: "Asia/Seoul",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+function sessionLabel(s: ChatSessionSummary): string {
+  if (s.title && s.title.trim()) return s.title;
+  try {
+    return TIME_FORMATTER.format(new Date(s.updated_at));
+  } catch {
+    return s.updated_at.slice(5, 16);
+  }
+}
+
 /**
- * 종목 컨텍스트가 자동 주입되는 LLM 상담 패널.
- * - 모델은 /llm/models 응답에서 채워지고, 키가 없는 provider는 자동 제외됨.
- * - 사용자가 고른 모델은 localStorage에 저장 → 새로고침 후에도 유지.
- * - History는 컴포넌트 로컬 state. 종목 바뀌면 자동 reset (key prop 활용).
+ * LLM 상담 패널 + 세션 영속화.
+ *
+ * - 마운트 시 종목별 세션 리스트 fetch
+ * - URL ?session=N이 있고 같은 종목이면 그 세션 활성화, 없으면 가장 최근 세션
+ * - 활성 세션의 메시지를 백엔드에서 받아 history로 사용
+ * - 질문 보낼 때 session_id 포함 → 새 세션이면 백엔드가 만들어 응답에 id 동봉
+ * - 모델 선택은 localStorage에 영속 (이전과 동일)
  */
 export function ChatPanel({ exchange, symbol }: Props) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // ----- Models -----
   const [models, setModels] = useState<LLMModelInfo[] | null>(null);
   const [modelsError, setModelsError] = useState<string>("");
   const [selectedKey, setSelectedKey] = useState<string>("");
 
+  // ----- Sessions -----
+  const [sessions, setSessions] = useState<ChatSessionSummary[] | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
+
+  // ----- Conversation -----
   const [history, setHistory] = useState<ChatTurn[]>([]);
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>("");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  // 모델 카탈로그 로드 — 마운트 1회.
+  // Helper: rewrite the URL keeping ?symbol intact, optionally setting ?session.
+  const updateSessionInUrl = useCallback(
+    (id: number | null) => {
+      const params = new URLSearchParams(searchParams.toString());
+      if (id === null) {
+        params.delete("session");
+      } else {
+        params.set("session", String(id));
+      }
+      const q = params.toString();
+      router.replace(q ? `/?${q}` : "/");
+    },
+    [router, searchParams],
+  );
+
+  // ----- Load models (once on mount) -----
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -70,7 +121,72 @@ export function ChatPanel({ exchange, symbol }: Props) {
     };
   }, []);
 
-  // 새 메시지 추가 시 자동 스크롤 to bottom.
+  // ----- Load sessions for the current symbol, pick active session -----
+  // Re-runs only when (exchange, symbol) changes. URL ?session= changes do
+  // NOT retrigger this — they go through the message loader directly.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await listChatSessions({ exchange, symbol, limit: 50 });
+        if (cancelled) return;
+        setSessions(res.items);
+
+        const urlSessionStr = searchParams.get("session");
+        const urlSessionId = urlSessionStr ? Number(urlSessionStr) : null;
+        const urlMatch =
+          urlSessionId != null && res.items.find((s) => s.id === urlSessionId)
+            ? urlSessionId
+            : null;
+
+        const fallback = res.items[0]?.id ?? null;
+        const next = urlMatch ?? fallback;
+        setActiveSessionId(next);
+        // Keep URL consistent — if URL was stale, drop it.
+        if (urlSessionId != null && urlSessionId !== next) {
+          updateSessionInUrl(next);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : String(err));
+        setSessions([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // searchParams intentionally excluded — URL is read once per symbol
+    // change, not on every navigation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exchange, symbol]);
+
+  // ----- Load messages for active session -----
+  useEffect(() => {
+    let cancelled = false;
+    if (activeSessionId == null) {
+      setHistory([]);
+      return;
+    }
+    (async () => {
+      try {
+        const res = await getChatSession(activeSessionId);
+        if (cancelled) return;
+        setHistory(
+          res.messages.map((m) => ({ role: m.role, content: m.content })),
+        );
+        setError("");
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : String(err));
+        setHistory([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSessionId]);
+
+  // Auto-scroll on new message / loading state.
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -82,6 +198,39 @@ export function ChatPanel({ exchange, symbol }: Props) {
       window.localStorage.setItem(MODEL_STORAGE_KEY, key);
     }
   }, []);
+
+  const handleSessionChange = useCallback(
+    (id: number | null) => {
+      setActiveSessionId(id);
+      updateSessionInUrl(id);
+      setConfirmingDelete(false);
+    },
+    [updateSessionInUrl],
+  );
+
+  const handleNewChat = useCallback(() => {
+    // We just clear the active session — the actual session row is created
+    // server-side on first /chat call.
+    handleSessionChange(null);
+  }, [handleSessionChange]);
+
+  const handleDeleteSession = useCallback(async () => {
+    if (activeSessionId == null) return;
+    if (!confirmingDelete) {
+      setConfirmingDelete(true);
+      return;
+    }
+    const id = activeSessionId;
+    setConfirmingDelete(false);
+    try {
+      await deleteChatSession(id);
+      const remaining = (sessions ?? []).filter((s) => s.id !== id);
+      setSessions(remaining);
+      handleSessionChange(remaining[0]?.id ?? null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [activeSessionId, confirmingDelete, sessions, handleSessionChange]);
 
   const selectedModel = useMemo(
     () => models?.find((m) => m.key === selectedKey) ?? null,
@@ -106,7 +255,7 @@ export function ChatPanel({ exchange, symbol }: Props) {
           exchange,
           symbol,
           question: q,
-          history,
+          session_id: activeSessionId,
           provider: selectedModel.provider,
           model: selectedModel.model_id,
         });
@@ -114,24 +263,81 @@ export function ChatPanel({ exchange, symbol }: Props) {
           ...nextHistory,
           { role: "assistant", content: res.answer },
         ]);
+        // Backend may have created a session for us.
+        if (res.session_id != null && res.session_id !== activeSessionId) {
+          setActiveSessionId(res.session_id);
+          updateSessionInUrl(res.session_id);
+        }
+        // Refresh sessions list (updated_at moved + maybe new row + auto-title).
+        try {
+          const updated = await listChatSessions({ exchange, symbol, limit: 50 });
+          setSessions(updated.items);
+        } catch {
+          // non-fatal — the next mount will refresh
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
-        // 사용자 질문은 유지하되, assistant 응답 자리는 비워둠.
       } finally {
         setLoading(false);
       }
     },
-    [exchange, symbol, question, history, loading, selectedModel],
+    [
+      exchange,
+      symbol,
+      question,
+      history,
+      loading,
+      selectedModel,
+      activeSessionId,
+      updateSessionInUrl,
+    ],
   );
-
-  const handleClear = useCallback(() => {
-    setHistory([]);
-    setError("");
-  }, []);
 
   return (
     <div className="flex h-[640px] flex-col rounded-lg bg-white shadow">
-      {/* Header: 모델 선택 + 히스토리 초기화 */}
+      {/* Header row 1: session selector + new + delete */}
+      <div className="flex items-center gap-2 border-b border-gray-100 p-3">
+        <select
+          value={activeSessionId ?? ""}
+          onChange={(e) =>
+            handleSessionChange(e.target.value ? Number(e.target.value) : null)
+          }
+          disabled={!sessions || sessions.length === 0}
+          className="min-w-0 flex-1 rounded border border-gray-300 bg-white px-2 py-1 text-sm text-gray-900 disabled:bg-gray-50"
+        >
+          {activeSessionId == null && (
+            <option value="">(새 대화)</option>
+          )}
+          {sessions?.map((s) => (
+            <option key={s.id} value={s.id}>
+              {sessionLabel(s)} · {s.message_count}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={handleNewChat}
+          className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
+          title="새 대화 시작"
+        >
+          새 대화
+        </button>
+        <button
+          type="button"
+          onClick={handleDeleteSession}
+          disabled={activeSessionId == null}
+          className={`rounded border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40 ${
+            confirmingDelete
+              ? "border-red-500 bg-red-50 text-red-700"
+              : "border-gray-300 text-gray-700 hover:bg-gray-50"
+          }`}
+          title="현재 세션 삭제"
+        >
+          {confirmingDelete ? "정말?" : "삭제"}
+        </button>
+      </div>
+
+      {/* Header row 2: model + clear-only-button removed (now per-session) */}
       <div className="flex items-center gap-2 border-b border-gray-200 p-3">
         <span className="text-xs font-medium text-gray-500">모델</span>
         {models === null ? (
@@ -153,22 +359,14 @@ export function ChatPanel({ exchange, symbol }: Props) {
             ))}
           </select>
         )}
-        <button
-          type="button"
-          onClick={handleClear}
-          disabled={history.length === 0 && !error}
-          className="ml-auto rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          대화 초기화
-        </button>
       </div>
 
       {/* History */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-3">
         {history.length === 0 && !loading && !error ? (
           <p className="mt-8 text-center text-sm text-gray-400">
-            {exchange}:{symbol} 종목의 시세 · 추세 · 기술적 지표가 자동으로
-            컨텍스트에 들어갑니다.
+            {exchange}:{symbol} 종목의 시세 · 추세 · 기술적 지표 · 최근 공시가
+            자동으로 컨텍스트에 들어갑니다.
             <br />
             아래에 질문을 입력해보세요.
           </p>
@@ -201,10 +399,7 @@ export function ChatPanel({ exchange, symbol }: Props) {
       </div>
 
       {/* Input */}
-      <form
-        onSubmit={handleSubmit}
-        className="border-t border-gray-200 p-3"
-      >
+      <form onSubmit={handleSubmit} className="border-t border-gray-200 p-3">
         <div className="flex gap-2">
           <input
             type="text"

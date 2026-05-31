@@ -77,7 +77,8 @@ export interface ChatRequest {
   exchange: string;
   symbol: string;
   question: string;
-  history: ChatTurn[];
+  session_id?: number | null;
+  history?: ChatTurn[] | null;
   provider?: string;
   model?: string;
 }
@@ -90,6 +91,37 @@ export interface ChatResponse {
   input_tokens: number;
   output_tokens: number;
   context_preview: string;
+  session_id: number | null;
+}
+
+export interface ChatSessionSummary {
+  id: number;
+  instrument_id: number;
+  instrument: string; // "EX:SYM"
+  title: string | null;
+  message_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatSessionListResponse {
+  count: number;
+  items: ChatSessionSummary[];
+}
+
+export interface ChatMessageRecord {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  model: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  created_at: string;
+}
+
+export interface ChatSessionDetailResponse {
+  session: ChatSessionSummary;
+  messages: ChatMessageRecord[];
 }
 
 // ---------- Fetch helpers ----------
@@ -195,6 +227,40 @@ export function chat(body: ChatRequest): Promise<ChatResponse> {
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+// ---------- Chat sessions ----------
+
+export function listChatSessions(args: {
+  exchange?: string;
+  symbol?: string;
+  limit?: number;
+}): Promise<ChatSessionListResponse> {
+  const qs = new URLSearchParams();
+  if (args.exchange) qs.set("exchange", args.exchange);
+  if (args.symbol) qs.set("symbol", args.symbol);
+  if (args.limit !== undefined) qs.set("limit", String(args.limit));
+  const q = qs.toString();
+  return http<ChatSessionListResponse>(`/chat/sessions${q ? `?${q}` : ""}`);
+}
+
+export function createChatSession(args: {
+  exchange: string;
+  symbol: string;
+  title?: string | null;
+}): Promise<ChatSessionSummary> {
+  return http<ChatSessionSummary>("/chat/sessions", {
+    method: "POST",
+    body: JSON.stringify(args),
+  });
+}
+
+export function getChatSession(id: number): Promise<ChatSessionDetailResponse> {
+  return http<ChatSessionDetailResponse>(`/chat/sessions/${id}`);
+}
+
+export function deleteChatSession(id: number): Promise<void> {
+  return http<void>(`/chat/sessions/${id}`, { method: "DELETE" });
 }
 
 // ---------- Disclosures ----------
