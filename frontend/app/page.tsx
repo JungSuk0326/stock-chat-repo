@@ -3,6 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useMemo } from "react";
 
+import { AlertsPanel } from "@/components/AlertsPanel";
 import { ChatPanel } from "@/components/ChatPanel";
 import { DisclosurePanel } from "@/components/DisclosurePanel";
 import { PriceChart } from "@/components/PriceChart";
@@ -66,6 +67,14 @@ function PageBody() {
             exchange={selected.exchange}
             symbol={selected.symbol}
           />
+
+          <div className="mt-4">
+            <AlertsPanel
+              key={`alerts:${selected.exchange}:${selected.symbol}`}
+              exchange={selected.exchange}
+              symbol={selected.symbol}
+            />
+          </div>
 
           <div className="mt-4">
             <DisclosurePanel

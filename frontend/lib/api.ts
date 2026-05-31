@@ -263,6 +263,78 @@ export function deleteChatSession(id: number): Promise<void> {
   return http<void>(`/chat/sessions/${id}`, { method: "DELETE" });
 }
 
+// ---------- Alerts ----------
+
+export type AlertConditionType =
+  | "price_above"
+  | "price_below"
+  | "pct_change_above"
+  | "pct_change_below";
+
+export interface AlertRule {
+  id: number;
+  instrument_id: number;
+  instrument: string;
+  name: string | null;
+  condition_type: AlertConditionType;
+  threshold: string; // Decimal serialized as string
+  enabled: boolean;
+  cooldown_minutes: number;
+  market_hours_only: boolean;
+  last_triggered_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AlertRuleListResponse {
+  count: number;
+  items: AlertRule[];
+}
+
+export interface AlertRuleCreateRequest {
+  exchange: string;
+  symbol: string;
+  name?: string | null;
+  condition_type: AlertConditionType;
+  threshold: number;
+  cooldown_minutes?: number;
+  market_hours_only?: boolean;
+}
+
+export function listAlertRules(args: {
+  exchange?: string;
+  symbol?: string;
+}): Promise<AlertRuleListResponse> {
+  const qs = new URLSearchParams();
+  if (args.exchange) qs.set("exchange", args.exchange);
+  if (args.symbol) qs.set("symbol", args.symbol);
+  const q = qs.toString();
+  return http<AlertRuleListResponse>(`/alerts${q ? `?${q}` : ""}`);
+}
+
+export function createAlertRule(
+  body: AlertRuleCreateRequest,
+): Promise<AlertRule> {
+  return http<AlertRule>("/alerts", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function patchAlertRule(
+  id: number,
+  body: { enabled: boolean },
+): Promise<AlertRule> {
+  return http<AlertRule>(`/alerts/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteAlertRule(id: number): Promise<void> {
+  return http<void>(`/alerts/${id}`, { method: "DELETE" });
+}
+
 // ---------- Disclosures ----------
 
 export interface DisclosureItem {

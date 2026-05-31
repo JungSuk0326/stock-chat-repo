@@ -5,6 +5,7 @@ import structlog
 from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api import alerts as alerts_api
 from app.api import chat as chat_api
 from app.api import chat_sessions as chat_sessions_api
 from app.api import disclosures as disclosures_api
@@ -83,6 +84,7 @@ app.include_router(chat_sessions_api.router)  # before chat_api so /chat/session
 app.include_router(chat_api.router)
 app.include_router(llm_api.router)
 app.include_router(disclosures_api.router)
+app.include_router(alerts_api.router)
 
 
 @app.get("/health")
