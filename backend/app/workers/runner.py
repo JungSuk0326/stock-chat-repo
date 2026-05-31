@@ -33,6 +33,7 @@ from app.core.redis_client import redis_client
 from app.models import WatchlistEntry
 from app.services.alert_channels.base import AlertChannel
 from app.services.alert_channels.log import LogChannel
+from app.services.alert_channels.telegram import TelegramChannel
 from app.services.alerts import tick_alert_runner
 from app.services.disclosure.kr import DartAdapter
 from app.services.disclosures import (
@@ -135,6 +136,30 @@ async def backfill_disclosures(
         )
 
 
+def _build_alert_channel(settings) -> AlertChannel:
+    """Pick the alert delivery channel based on settings, with safe
+    fallbacks so a half-configured deploy still boots."""
+    choice = (settings.ALERT_CHANNEL or "log").strip().lower()
+    if choice == "telegram":
+        if settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID:
+            return TelegramChannel(
+                bot_token=settings.TELEGRAM_BOT_TOKEN,
+                chat_id=settings.TELEGRAM_CHAT_ID,
+            )
+        log.warning(
+            "worker.alert_channel.telegram_unconfigured",
+            note="TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing — falling back to log",
+        )
+        return LogChannel()
+    if choice != "log":
+        log.warning(
+            "worker.alert_channel.unknown",
+            choice=choice,
+            note="unknown ALERT_CHANNEL value — falling back to log",
+        )
+    return LogChannel()
+
+
 async def disclosure_poll_tick(adapter: DartAdapter) -> None:
     """Per-minute disclosure poll across the entire KR watchlist.
 
@@ -181,9 +206,10 @@ async def main() -> None:
             note="set DART_API_KEY in .env to enable disclosure ingestion",
         )
 
-    # Alert delivery channel. Phase B ships LogChannel only; Phase C will
-    # pick TelegramChannel when settings.ALERT_CHANNEL == "telegram".
-    alert_channel: AlertChannel = LogChannel()
+    # Alert delivery channel. "telegram" falls back to "log" if the bot
+    # token / chat id aren't both configured — the operator gets a clear
+    # warning instead of a crash loop.
+    alert_channel: AlertChannel = _build_alert_channel(settings)
     log.info("worker.alert_channel", channel=alert_channel.name)
 
     # Active pollers, keyed by canonical id "EX:SYM".
