@@ -31,6 +31,9 @@ from app.core.db import SessionLocal
 from app.core.logging import configure_logging
 from app.core.redis_client import redis_client
 from app.models import WatchlistEntry
+from app.services.alert_channels.base import AlertChannel
+from app.services.alert_channels.log import LogChannel
+from app.services.alerts import tick_alert_runner
 from app.services.disclosure.kr import DartAdapter
 from app.services.disclosures import (
     sync_corp_codes,
@@ -56,6 +59,9 @@ DISCLOSURE_POLL_INTERVAL_SECONDS = 60
 DISCLOSURE_BACKFILL_DAYS = 180          # 6 months
 DISCLOSURE_POLL_LOOKBACK_DAYS = 2       # today + yesterday — covers post-midnight crossover
                                         # and brief worker downtime in one shot
+
+# Alert evaluator
+ALERT_INTERVAL_SECONDS = 60
 
 
 def _poller_job_id(exchange: str, symbol: str) -> str:
@@ -174,6 +180,11 @@ async def main() -> None:
             "worker.dart.no_api_key",
             note="set DART_API_KEY in .env to enable disclosure ingestion",
         )
+
+    # Alert delivery channel. Phase B ships LogChannel only; Phase C will
+    # pick TelegramChannel when settings.ALERT_CHANNEL == "telegram".
+    alert_channel: AlertChannel = LogChannel()
+    log.info("worker.alert_channel", channel=alert_channel.name)
 
     # Active pollers, keyed by canonical id "EX:SYM".
     pollers: dict[str, PricePoller] = {}
@@ -310,6 +321,20 @@ async def main() -> None:
             misfire_grace_time=DISCLOSURE_POLL_INTERVAL_SECONDS,
         )
 
+    # Per-minute alert evaluator. max_instances=1 means we never overlap
+    # evaluations even if a tick runs long; cooldown_minutes on each rule
+    # provides the user-facing dedup window.
+    scheduler.add_job(
+        tick_alert_runner,
+        "interval",
+        seconds=ALERT_INTERVAL_SECONDS,
+        args=[redis_client, alert_channel],
+        id="alert_runner",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=ALERT_INTERVAL_SECONDS,
+    )
+
     scheduler.start()
 
     # Wait for SIGINT/SIGTERM so docker compose stop is graceful.
@@ -324,6 +349,7 @@ async def main() -> None:
     scheduler.shutdown(wait=False)
     await kr_adapter.aclose()
     await dart_adapter.aclose()
+    await alert_channel.aclose()
     await redis_client.aclose()
 
 

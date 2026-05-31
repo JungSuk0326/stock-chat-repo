@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
 
+    # Alerts
+    # "log" routes fires to structlog (always works, dev default).
+    # "telegram" requires TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID; falls back
+    # to "log" at runtime if either is missing.
+    ALERT_CHANNEL: str = "log"
+
     # LLM
     # Default provider/model when the client doesn't specify one. Catalog
     # filters by which keys are set (no key → not offered to the UI).
