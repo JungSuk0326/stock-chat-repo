@@ -6,6 +6,7 @@ from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import chat as chat_api
+from app.api import chat_sessions as chat_sessions_api
 from app.api import disclosures as disclosures_api
 from app.api import instruments as instruments_api
 from app.api import llm as llm_api
@@ -78,6 +79,7 @@ app.include_router(prices_api.router)
 app.include_router(ws_prices_api.router)
 app.include_router(instruments_api.router)
 app.include_router(watchlist_api.router)
+app.include_router(chat_sessions_api.router)  # before chat_api so /chat/sessions matches first
 app.include_router(chat_api.router)
 app.include_router(llm_api.router)
 app.include_router(disclosures_api.router)
