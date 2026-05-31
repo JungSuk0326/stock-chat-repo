@@ -18,7 +18,7 @@
 
 ## 현재 진행 상태
 
-마지막 갱신: 2026-05-31 (Task Top2 — DART 공시 수집 + 컨텍스트 합류 + UI까지)
+마지막 갱신: 2026-05-31 (Task Top3 — 채팅 영속화 + 최소 user 골격까지)
 
 ### 기반 구조
 - [x] CLAUDE.md 초안 + 멀티마켓/발굴 섹션 + Skill routing
@@ -35,6 +35,9 @@
 - [x] `watchlist` 테이블 — 사용자 관심종목 (단일 사용자, UNIQUE instrument_id)
 - [x] `corp_codes` 테이블 — 규제기관 corp-id ↔ (exchange, symbol) 매핑 (DART corp_code, 추후 SEC CIK)
 - [x] `disclosures` 테이블 — instrument_id FK + source/source_id + filed_at(UTC) + title/submitter/raw_url
+- [x] `users` 테이블 — 멀티 유저 골격 (현재 owner row 1개), 새 테이블은 user_id FK 포함
+- [x] `chat_sessions` 테이블 — user_id + instrument_id + title, INDEX(user_id, instrument_id, updated_at)
+- [x] `chat_messages` 테이블 — session_id FK + role/content + LLM accounting (model/tokens), CASCADE delete
 - [ ] `news_items`, `community_signals` 테이블
 - [ ] `screeners`, `candidates`, `fundamentals_snapshot` 테이블 (발굴)
 - [ ] `alerts`, `alert_rules` 테이블
@@ -66,9 +69,10 @@
 - [x] 프론트엔드 첫 차트 — Next.js 16 + lightweight-charts
 - [x] 프론트엔드 실시간 연동 — 라이브 뱃지, 자동 재연결, tick→오늘 봉 업데이트
 - [x] 프론트엔드 watchlist 사이드바 + 검색 모달 + URL 라우팅(`?symbol=...`)
-- [x] **LLM 상담 UI** — ChatPanel 컴포넌트, 모델 드롭다운, localStorage 모델 선택 유지, 종목 전환 시 히스토리 reset
+- [x] **LLM 상담 UI** (`ChatPanel`) — 세션 드롭다운 + "새 대화" + 삭제, URL ?session= 라우팅, 모델 선택 localStorage
 - [x] `GET /llm/models` — 카탈로그 (provider 키 있는 모델만 노출) + default 정보
-- [x] `POST /chat` — provider/model 선택, 컨텍스트 자동 주입
+- [x] `POST /chat` — provider/model 선택, 컨텍스트 자동 주입, session_id 처리 (3 모드: 이어쓰기/자동생성/ephemeral)
+- [x] **`GET/POST/DELETE /chat/sessions`** — 세션 CRUD (owner-scoped, get_current_user_id 의존성)
 - [x] **공시 UI** (`DisclosurePanel`) — 차트 아래 시간순 리스트, 60초 자동 새로고침, 제목 클릭 → DART 뷰어
 - [x] `GET /disclosures/{ex}/{sym}` — 종목별 최근 공시 (헤드라인만)
 - [ ] 발굴 후보 UI
@@ -80,6 +84,8 @@
 - [x] **Anthropic + Gemini 지원** — Claude Opus/Haiku 4.5/4.7, Gemini 2.5 Pro/Flash (4종)
 - [x] **provider/model 사용자 선택** — UI 드롭다운, 호출마다 클라이언트가 선택
 - [x] **공시 컨텍스트 합류** — 최근 14일 / 최대 20건, 헤드라인 + 제출인만 (본문 X)
+- [x] **채팅 세션 영속화** — `chat_sessions` + `chat_messages` DB 저장, 새로고침/디바이스 간 동기화
+- [x] **세션 자동 타이틀** — 첫 메시지 교환 직후 Gemini Flash로 ~30자 요약 (백그라운드, fail-soft)
 - [ ] 뉴스 헤드라인 합류 (뉴스 수집 후)
 - [ ] 종토방 감성 집계 합류 (감성 분류 후)
 - [ ] 종목 발굴 — 조건 스크리닝
