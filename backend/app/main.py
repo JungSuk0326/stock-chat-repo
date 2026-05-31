@@ -6,6 +6,7 @@ from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import chat as chat_api
+from app.api import disclosures as disclosures_api
 from app.api import instruments as instruments_api
 from app.api import llm as llm_api
 from app.api import prices as prices_api
@@ -79,6 +80,7 @@ app.include_router(instruments_api.router)
 app.include_router(watchlist_api.router)
 app.include_router(chat_api.router)
 app.include_router(llm_api.router)
+app.include_router(disclosures_api.router)
 
 
 @app.get("/health")

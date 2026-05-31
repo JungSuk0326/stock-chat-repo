@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useMemo } from "react";
 
 import { ChatPanel } from "@/components/ChatPanel";
+import { DisclosurePanel } from "@/components/DisclosurePanel";
 import { PriceChart } from "@/components/PriceChart";
 import { WatchlistPanel } from "@/components/WatchlistPanel";
 
@@ -65,6 +66,14 @@ function PageBody() {
             exchange={selected.exchange}
             symbol={selected.symbol}
           />
+
+          <div className="mt-4">
+            <DisclosurePanel
+              key={`disclosures:${selected.exchange}:${selected.symbol}`}
+              exchange={selected.exchange}
+              symbol={selected.symbol}
+            />
+          </div>
         </main>
 
         <aside className="w-[420px] shrink-0">

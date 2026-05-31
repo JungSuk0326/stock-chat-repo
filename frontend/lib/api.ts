@@ -196,3 +196,35 @@ export function chat(body: ChatRequest): Promise<ChatResponse> {
     body: JSON.stringify(body),
   });
 }
+
+// ---------- Disclosures ----------
+
+export interface DisclosureItem {
+  id: number;
+  source: string;
+  source_id: string;
+  title: string;
+  filed_at: string;
+  report_type: string | null;
+  submitter: string | null;
+  raw_url: string | null;
+}
+
+export interface DisclosureListResponse {
+  instrument: string;
+  count: number;
+  items: DisclosureItem[];
+}
+
+export function getDisclosures(args: {
+  exchange: string;
+  symbol: string;
+  limit?: number;
+}): Promise<DisclosureListResponse> {
+  const qs = new URLSearchParams();
+  if (args.limit !== undefined) qs.set("limit", String(args.limit));
+  const query = qs.toString();
+  return http<DisclosureListResponse>(
+    `/disclosures/${args.exchange}/${args.symbol}${query ? `?${query}` : ""}`,
+  );
+}
