@@ -18,7 +18,7 @@
 
 ## 현재 진행 상태
 
-마지막 갱신: 2026-05-30 (Task Top1 — LLM 상담 (multi-provider, 모델 선택 UI)까지)
+마지막 갱신: 2026-05-31 (Task Top2 — DART 공시 수집 + 컨텍스트 합류 + UI까지)
 
 ### 기반 구조
 - [x] CLAUDE.md 초안 + 멀티마켓/발굴 섹션 + Skill routing
@@ -33,7 +33,8 @@
 - [x] `instruments` 테이블 — exchange/symbol/country/currency/market/isin/name
 - [x] `prices` hypertable — TimescaleDB 7d chunk + 30d 이후 자동 압축
 - [x] `watchlist` 테이블 — 사용자 관심종목 (단일 사용자, UNIQUE instrument_id)
-- [ ] `disclosures` 테이블 (공시)
+- [x] `corp_codes` 테이블 — 규제기관 corp-id ↔ (exchange, symbol) 매핑 (DART corp_code, 추후 SEC CIK)
+- [x] `disclosures` 테이블 — instrument_id FK + source/source_id + filed_at(UTC) + title/submitter/raw_url
 - [ ] `news_items`, `community_signals` 테이블
 - [ ] `screeners`, `candidates`, `fundamentals_snapshot` 테이블 (발굴)
 - [ ] `alerts`, `alert_rules` 테이블
@@ -50,9 +51,10 @@
 - [x] **신규 watchlist 종목 자동 EOD backfill** — reconcile 시점에 1년치 일봉 fire-and-forget
 - [x] **매일 EOD 일봉 sync** — 16:00 KST cron, watchlist 전체 종목 최근 7일 (멱등 UPSERT)
 - [x] **매일 instruments 갱신** — 06:00 KST cron, FDR로 KOSPI/KOSDAQ 전 종목 마스터 UPSERT
-- [ ] DART corp_code 동기화 (R11)
+- [x] **DART corp_code 동기화** (R11) — 매일 05:30 KST cron, ZIP/XML 파싱 → 상장사 ~3,900개
+- [x] **DART 공시 수집 워커** — 1분 폴링, watchlist 전체 종목 [today-1, today] KST
+- [x] **신규 watchlist 종목 공시 backfill** — 가입 시점 6개월치 fire-and-forget
 - [ ] 헬스체크 메트릭 (R1)
-- [ ] DART 공시 수집 + corp_code 동기화
 - [ ] 네이버 금융 뉴스 + RSS 수집
 - [ ] 종토방 크롤링 + 감성 분류 (claude-haiku)
 
@@ -67,17 +69,21 @@
 - [x] **LLM 상담 UI** — ChatPanel 컴포넌트, 모델 드롭다운, localStorage 모델 선택 유지, 종목 전환 시 히스토리 reset
 - [x] `GET /llm/models` — 카탈로그 (provider 키 있는 모델만 노출) + default 정보
 - [x] `POST /chat` — provider/model 선택, 컨텍스트 자동 주입
+- [x] **공시 UI** (`DisclosurePanel`) — 차트 아래 시간순 리스트, 60초 자동 새로고침, 제목 클릭 → DART 뷰어
+- [x] `GET /disclosures/{ex}/{sym}` — 종목별 최근 공시 (헤드라인만)
 - [ ] 발굴 후보 UI
 
 ### LLM
 - [x] **LLM 비용 hard cap (R2)** — Redis 기반 daily/monthly 통합 카운터, provider 무관
-- [x] **`assemble_context()` 어셈블러** — 현재가/추세/MA/RSI 자동 빌드 (~160 토큰)
+- [x] **`assemble_context()` 어셈블러** — 현재가/추세/MA/RSI/공시 헤드라인 자동 빌드
 - [x] **Multi-provider 추상화** — `LLMClient` ABC + `LLMRegistry` + `catalog` 정적 모델 목록
 - [x] **Anthropic + Gemini 지원** — Claude Opus/Haiku 4.5/4.7, Gemini 2.5 Pro/Flash (4종)
 - [x] **provider/model 사용자 선택** — UI 드롭다운, 호출마다 클라이언트가 선택
+- [x] **공시 컨텍스트 합류** — 최근 14일 / 최대 20건, 헤드라인 + 제출인만 (본문 X)
+- [ ] 뉴스 헤드라인 합류 (뉴스 수집 후)
+- [ ] 종토방 감성 집계 합류 (감성 분류 후)
 - [ ] 종목 발굴 — 조건 스크리닝
 - [ ] 종목 발굴 — LLM 기반 추천
-- [ ] 공시·뉴스·종토방 감성을 컨텍스트 어셈블러에 합류 (도메인 데이터 도입 후)
 
 ### 운영 / 보안 / 배포
 - [ ] 알림 시스템 (텔레그램)
