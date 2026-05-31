@@ -2,13 +2,13 @@
 
 CLAUDE.md priority (high → low):
   1. 현재가, 등락률, 거래량
-  2. 당일/최근 공시 헤드라인         ← 미구현 (도메인 도입 시 합류)
+  2. 당일/최근 공시 헤드라인
   3. 최근 24h 뉴스 헤드라인           ← 미구현
   4. 커뮤니티 감성 집계               ← 미구현
   5. 기술적 지표 (이동평균, RSI 등)
   6. 과거 차트 요약 (1주/1개월 추세)
 
-Target size: ~1500 tokens. We're well under that with only #1, #5, #6.
+Target size: ~1500 tokens.
 
 The output is Korean prose with numbers — that's what the LLM has to reason
 about, and human-readable formatting helps both the LLM and debugging.
@@ -17,8 +17,8 @@ about, and human-readable formatting helps both the LLM and debugging.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import structlog
@@ -26,9 +26,25 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Instrument, Price
+from app.models import Disclosure, Instrument, Price
+
+# Disclosure window for the LLM context. Last N days, capped to MAX entries.
+# Samsung-class large caps file ~10/day (mostly operator share transactions);
+# the cap keeps the prompt bounded while a date floor keeps stale items out.
+DISCLOSURE_WINDOW_DAYS = 14
+DISCLOSURE_MAX_COUNT = 20
 
 log = structlog.get_logger()
+
+
+@dataclass
+class DisclosureSummary:
+    """Minimal headline. Body is intentionally never loaded (CLAUDE.md
+    policy + token budget)."""
+
+    filed_at: datetime  # UTC
+    title: str
+    submitter: str | None
 
 
 @dataclass
@@ -58,6 +74,8 @@ class LLMContext:
     rsi14: float | None
 
     recent_bars_count: int
+
+    recent_disclosures: list[DisclosureSummary] = field(default_factory=list)
 
     def as_text(self) -> str:
         ccy = self.currency
@@ -97,6 +115,19 @@ class LLMContext:
                 f"고 {_fmt_money(self.year_high, ccy)}"
             )
         lines.append(f"- 보유 일봉 수: {self.recent_bars_count}")
+        lines.append("")
+
+        # 2. 최근 공시 — 헤드라인만, 본문 X (CLAUDE.md 정책 + 토큰 예산)
+        lines.append(
+            f"### 최근 공시 (최근 {DISCLOSURE_WINDOW_DAYS}일, 최대 {DISCLOSURE_MAX_COUNT}건)"
+        )
+        if self.recent_disclosures:
+            for d in self.recent_disclosures:
+                date_part = d.filed_at.strftime("%m-%d")
+                submitter = f" · {d.submitter}" if d.submitter else ""
+                lines.append(f"- {date_part}{submitter}: {d.title}")
+        else:
+            lines.append("- (해당 기간 공시 없음)")
         lines.append("")
 
         # 5. 기술적 지표
@@ -227,6 +258,33 @@ async def assemble_context(
     year_high = max(closes) if closes else None
     year_low = min(closes) if closes else None
 
+    # Recent disclosures (priority 2). Date floor + count cap together bound
+    # the prompt for noisy filers like Samsung.
+    cutoff = datetime.now(timezone.utc) - timedelta(days=DISCLOSURE_WINDOW_DAYS)
+    disclosure_rows = (
+        (
+            await db.execute(
+                select(Disclosure)
+                .where(
+                    Disclosure.instrument_id == instrument.id,
+                    Disclosure.filed_at >= cutoff,
+                )
+                .order_by(Disclosure.filed_at.desc(), Disclosure.id.desc())
+                .limit(DISCLOSURE_MAX_COUNT)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    recent_disclosures = [
+        DisclosureSummary(
+            filed_at=d.filed_at,
+            title=d.title,
+            submitter=d.submitter,
+        )
+        for d in disclosure_rows
+    ]
+
     return LLMContext(
         canonical_id=f"{instrument.exchange}:{instrument.symbol}",
         name=instrument.name,
@@ -246,6 +304,7 @@ async def assemble_context(
         ma60=_sma(closes, 60),
         rsi14=_rsi(closes, 14),
         recent_bars_count=len(bars),
+        recent_disclosures=recent_disclosures,
     )
 
 
