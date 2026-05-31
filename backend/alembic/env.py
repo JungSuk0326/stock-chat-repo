@@ -23,6 +23,23 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+
+def include_object(object_, name, type_, reflected, compare_to):
+    """Skip TimescaleDB-managed objects from autogenerate diffs.
+
+    create_hypertable() auto-creates `prices_time_idx` on the hypertable.
+    That index is not represented in our ORM and SQLAlchemy reflection
+    sees it as "extra" → autogenerate keeps trying to drop it on every
+    new migration. Previously we hand-edited each migration to remove
+    the drop; this filter makes it permanent.
+
+    Add other Timescale-internal objects here if/when they show up.
+    """
+    if type_ == "index" and reflected and name == "prices_time_idx":
+        return False
+    return True
+
+
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
@@ -47,6 +64,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_object=include_object,
     )
 
     with context.begin_transaction():
@@ -54,7 +72,11 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        include_object=include_object,
+    )
 
     with context.begin_transaction():
         context.run_migrations()
