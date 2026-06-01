@@ -18,7 +18,7 @@
 
 ## 현재 진행 상태
 
-마지막 갱신: 2026-06-02 (R1 헬스 메트릭 + R5 DB 백업까지)
+마지막 갱신: 2026-06-02 (Top6 — 뉴스 수집 + 컨텍스트 합류 + 공시/뉴스 탭 UI까지)
 
 ### 기반 구조
 - [x] CLAUDE.md 초안 + 멀티마켓/발굴 섹션 + Skill routing
@@ -40,7 +40,8 @@
 - [x] `chat_messages` 테이블 — session_id FK + role/content + LLM accounting (model/tokens), CASCADE delete
 - [x] `alert_rules` 테이블 — user_id + instrument_id + condition_type + threshold + cooldown_minutes + market_hours_only + last_triggered_at
 - [x] `alert_events` 테이블 — rule_id FK + fired_at + triggered_value + channel + delivery_status (발화 이력/디버깅)
-- [ ] `news_items`, `community_signals` 테이블
+- [x] `news_items` 테이블 — instrument_id FK + source/source_id + title + published_at(UTC) + url + publisher (본문 X)
+- [ ] `community_signals` 테이블
 - [ ] `screeners`, `candidates`, `fundamentals_snapshot` 테이블 (발굴)
 
 ### KR 데이터 수집 (Phase 1)
@@ -61,7 +62,8 @@
 - [x] **알림 평가 워커** — 1분 폴링, 활성 룰 전체 평가, cooldown 적용, 발화 시 채널로 발송
 - [x] **헬스체크 메트릭 (R1)** — `app/workers/heartbeat.py`, 6개 잡 + backup 추적, `/health.workers` 노출, stale → 503
 - [x] **DB 백업 워커 (R5)** — `app/workers/backup.py`, 매일 03:30 KST `pg_dump | gzip`, BACKUP_RETENTION_DAYS 자동 정리, 오프사이트는 호스트 hyper backup
-- [ ] 네이버 금융 뉴스 + RSS 수집
+- [x] **네이버 금융 뉴스 수집 워커** — 5분 폴링, watchlist 전체, 신규 종목 50건 backfill, 본문 X (헤드라인만)
+- [ ] RSS 뉴스 (한경/매경/연합 — Phase 2 또는 필요 시)
 - [ ] 종토방 크롤링 + 감성 분류 (claude-haiku)
 
 ### API / UI
@@ -77,8 +79,9 @@
 - [x] `POST /chat` — provider/model 선택, 컨텍스트 자동 주입, session_id 처리 (3 모드: 이어쓰기/자동생성/ephemeral), **multi-turn tool use**
 - [x] **`GET/POST/DELETE /chat/sessions`** — 세션 CRUD (owner-scoped, get_current_user_id 의존성)
 - [x] **`POST /chat/tool-confirm`** — LLM이 제안한 쓰기 도구를 사용자 확인 후 실행
-- [x] **공시 UI** (`DisclosurePanel`) — 차트 아래 시간순 리스트, 60초 자동 새로고침, 제목 클릭 → DART 뷰어
+- [x] **시장 피드 UI** (`MarketFeedPanel`, 옛 `DisclosurePanel`) — 차트 아래 [공시][뉴스] 탭, localStorage로 활성 탭 영속, 60초 자동 새로고침
 - [x] `GET /disclosures/{ex}/{sym}` — 종목별 최근 공시 (헤드라인만)
+- [x] `GET /news/{ex}/{sym}` — 종목별 최근 뉴스 (헤드라인 + publisher + URL)
 - [x] **알림 UI** (`AlertsPanel`) — 조건 드롭다운 + 임계값 + 이름, 켜기/끄기 토글, 삭제, 30초 자동 새로고침 + ChatPanel 확인 시 CustomEvent로 즉시 반영
 - [x] `GET/POST/PATCH/DELETE /alerts` + `GET /alerts/{id}/events` — owner-scoped CRUD + 발화 이력
 - [x] **차트 지표 토글** (`ChartSettings`) — SMA(5/20/60/120) / EMA(12/26) / Bollinger(20,2σ) / RSI(14, 별도 페인), localStorage 영속
@@ -96,7 +99,7 @@
 - [x] **세션 자동 타이틀** — 첫 메시지 교환 직후 Gemini Flash로 ~30자 요약 (백그라운드, fail-soft)
 - [x] **LLM tool-use 인프라** — `LLMClient.ask(tools=...)`, Anthropic + Gemini 정규화, multi-turn round-trip (`ChatMessage.tool_calls`/`tool_results`)
 - [x] **알림 도구 3종** (`app/llm/tools.py`) — `list_alerts` (READ, 즉시) / `create_alert_rule` (WRITE, 확인 후) / `delete_alert` (WRITE, 확인 후). 실행 함수는 `app.services.alert_rules`와 동일 경로 공유
-- [ ] 뉴스 헤드라인 합류 (뉴스 수집 후)
+- [x] **뉴스 헤드라인 합류** — 최근 24시간 / 최대 15건, 헤드라인 + 언론사만 (본문 X)
 - [ ] 종토방 감성 집계 합류 (감성 분류 후)
 - [ ] 종목 발굴 — 조건 스크리닝
 - [ ] 종목 발굴 — LLM 기반 추천
