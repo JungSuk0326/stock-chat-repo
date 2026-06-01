@@ -45,6 +45,8 @@ from app.services.disclosures import (
 )
 from app.services.instruments import sync_kr_instruments
 from app.services.market.kr import KrMarketAdapter
+from app.services.news.kr import NaverNewsAdapter
+from app.services.news_sync import sync_news_for_symbol, sync_news_watchlist
 from app.services.prices import sync_eod_prices, sync_eod_watchlist
 from app.workers.price_poller import PricePoller
 
@@ -65,6 +67,11 @@ DISCLOSURE_POLL_LOOKBACK_DAYS = 2       # today + yesterday — covers post-midn
 
 # Alert evaluator
 ALERT_INTERVAL_SECONDS = 60
+
+# News collector
+NEWS_POLL_INTERVAL_SECONDS = 300      # 5 minutes
+NEWS_POLL_LIMIT_PER_SYMBOL = 30       # per tick, per symbol
+NEWS_BACKFILL_LIMIT = 50              # one-shot on new watchlist join
 
 
 def _poller_job_id(exchange: str, symbol: str) -> str:
@@ -162,6 +169,52 @@ def _build_alert_channel(settings) -> AlertChannel:
     return LogChannel()
 
 
+async def backfill_news(
+    adapter: NaverNewsAdapter, exchange: str, symbol: str
+) -> None:
+    """One-shot news backfill for a single instrument. Fire-and-forget by
+    reconcile_watchlist on new symbols. Naver returns newest first so a
+    single page (NEWS_BACKFILL_LIMIT items) covers the typical user
+    expectation of "show me recent news"."""
+    log.info(
+        "worker.news_backfill_started",
+        exchange=exchange,
+        symbol=symbol,
+        limit=NEWS_BACKFILL_LIMIT,
+    )
+    try:
+        count = await sync_news_for_symbol(
+            adapter,
+            exchange=exchange,
+            symbol=symbol,
+            limit=NEWS_BACKFILL_LIMIT,
+        )
+        log.info(
+            "worker.news_backfill_done",
+            exchange=exchange,
+            symbol=symbol,
+            new=count,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "worker.news_backfill_failed",
+            exchange=exchange,
+            symbol=symbol,
+            error=str(exc),
+        )
+
+
+async def news_poll_tick(adapter: NaverNewsAdapter) -> None:
+    """Every-N-minutes sweep across the watchlist. UNIQUE(source, source_id)
+    handles dedup at the DB layer so we don't need a high-water-mark."""
+    try:
+        new = await sync_news_watchlist(adapter, limit=NEWS_POLL_LIMIT_PER_SYMBOL)
+        if new:
+            log.info("worker.news_poll.new", new=new)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("worker.news_poll.failed", error=str(exc))
+
+
 async def disclosure_poll_tick(adapter: DartAdapter) -> None:
     """Per-minute disclosure poll across the entire KR watchlist.
 
@@ -213,6 +266,11 @@ async def main() -> None:
     # warning instead of a crash loop.
     alert_channel: AlertChannel = _build_alert_channel(settings)
     log.info("worker.alert_channel", channel=alert_channel.name)
+
+    # News adapter — Naver Mobile (unofficial). Always available since it
+    # needs no API key, but rate limits are unknown — the 5-min interval
+    # keeps us well below visible thresholds.
+    news_adapter = NaverNewsAdapter()
 
     # Active pollers, keyed by canonical id "EX:SYM".
     pollers: dict[str, PricePoller] = {}
@@ -280,6 +338,12 @@ async def main() -> None:
             asyncio.create_task(
                 backfill_disclosures(dart_adapter, exchange, symbol),
                 name=f"backfill_disclosures_{exchange}_{symbol}",
+            )
+            # And news — Naver returns most-recent first, so one page is
+            # enough to populate the UI list right away.
+            asyncio.create_task(
+                backfill_news(news_adapter, exchange, symbol),
+                name=f"backfill_news_{exchange}_{symbol}",
             )
 
     # Run reconcile once immediately so the initial state is correct without
@@ -377,6 +441,18 @@ async def main() -> None:
         misfire_grace_time=3600,
     )
 
+    # News sweep every 5 minutes across the watchlist (Top6).
+    scheduler.add_job(
+        with_heartbeat(redis_client, "news_poll", news_poll_tick),
+        "interval",
+        seconds=NEWS_POLL_INTERVAL_SECONDS,
+        args=[news_adapter],
+        id="news_poll",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=NEWS_POLL_INTERVAL_SECONDS,
+    )
+
     scheduler.start()
 
     # Wait for SIGINT/SIGTERM so docker compose stop is graceful.
@@ -391,6 +467,7 @@ async def main() -> None:
     scheduler.shutdown(wait=False)
     await kr_adapter.aclose()
     await dart_adapter.aclose()
+    await news_adapter.aclose()
     await alert_channel.aclose()
     await redis_client.aclose()
 

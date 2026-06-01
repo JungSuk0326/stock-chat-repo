@@ -33,6 +33,7 @@ HEARTBEAT_EXPECTATIONS: dict[str, int] = {
     "watchlist_sync": 120,        # nominal 30s
     "disclosure_poll": 300,       # nominal 60s
     "alert_runner": 300,          # nominal 60s
+    "news_poll": 1200,            # nominal 5min, stale at 20min
     # daily crons (allow 1h grace past the 24h window)
     "eod_sync_daily": 25 * 3600,
     "instruments_sync_daily": 25 * 3600,

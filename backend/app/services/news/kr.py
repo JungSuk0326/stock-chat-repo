@@ -33,6 +33,7 @@ adapter: unofficial, single-user fine, do not redistribute.
 
 from __future__ import annotations
 
+import html
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
@@ -97,12 +98,17 @@ class NaverNewsAdapter(NewsAdapter):
                     out.append(parsed)
         return out
 
+    async def aclose(self) -> None:
+        await self._http.aclose()
+
 
 def _parse_item(item: dict[str, Any], symbol: str) -> NewsItemData | None:
     article_id = (item.get("id") or "").strip()
     if not article_id:
         return None
-    title = (item.get("title") or "").strip()
+    # Naver returns titles with HTML entities (&quot; &amp; &#39; etc.).
+    # Decode once here so DB/UI/LLM all see clean text.
+    title = html.unescape((item.get("title") or "").strip())
     if not title:
         return None
     dt_str = (item.get("datetime") or "").strip()
