@@ -18,7 +18,7 @@
 
 ## 현재 진행 상태
 
-마지막 갱신: 2026-05-31 (Task Top3 — 채팅 영속화 + 최소 user 골격까지)
+마지막 갱신: 2026-06-01 (Task Top4 — 알림 시스템 (텔레그램 발송 검증)까지)
 
 ### 기반 구조
 - [x] CLAUDE.md 초안 + 멀티마켓/발굴 섹션 + Skill routing
@@ -38,9 +38,10 @@
 - [x] `users` 테이블 — 멀티 유저 골격 (현재 owner row 1개), 새 테이블은 user_id FK 포함
 - [x] `chat_sessions` 테이블 — user_id + instrument_id + title, INDEX(user_id, instrument_id, updated_at)
 - [x] `chat_messages` 테이블 — session_id FK + role/content + LLM accounting (model/tokens), CASCADE delete
+- [x] `alert_rules` 테이블 — user_id + instrument_id + condition_type + threshold + cooldown_minutes + market_hours_only + last_triggered_at
+- [x] `alert_events` 테이블 — rule_id FK + fired_at + triggered_value + channel + delivery_status (발화 이력/디버깅)
 - [ ] `news_items`, `community_signals` 테이블
 - [ ] `screeners`, `candidates`, `fundamentals_snapshot` 테이블 (발굴)
-- [ ] `alerts`, `alert_rules` 테이블
 
 ### KR 데이터 수집 (Phase 1)
 - [x] `KrMarketAdapter.fetch_instruments()` — FDR로 KOSPI/KOSDAQ 2,649개 적재
@@ -57,6 +58,7 @@
 - [x] **DART corp_code 동기화** (R11) — 매일 05:30 KST cron, ZIP/XML 파싱 → 상장사 ~3,900개
 - [x] **DART 공시 수집 워커** — 1분 폴링, watchlist 전체 종목 [today-1, today] KST
 - [x] **신규 watchlist 종목 공시 backfill** — 가입 시점 6개월치 fire-and-forget
+- [x] **알림 평가 워커** — 1분 폴링, 활성 룰 전체 평가, cooldown 적용, 발화 시 채널로 발송
 - [ ] 헬스체크 메트릭 (R1)
 - [ ] 네이버 금융 뉴스 + RSS 수집
 - [ ] 종토방 크롤링 + 감성 분류 (claude-haiku)
@@ -75,6 +77,8 @@
 - [x] **`GET/POST/DELETE /chat/sessions`** — 세션 CRUD (owner-scoped, get_current_user_id 의존성)
 - [x] **공시 UI** (`DisclosurePanel`) — 차트 아래 시간순 리스트, 60초 자동 새로고침, 제목 클릭 → DART 뷰어
 - [x] `GET /disclosures/{ex}/{sym}` — 종목별 최근 공시 (헤드라인만)
+- [x] **알림 UI** (`AlertsPanel`) — 조건 드롭다운 + 임계값 + 이름, 켜기/끄기 토글, 삭제, 30초 자동 새로고침
+- [x] `GET/POST/PATCH/DELETE /alerts` + `GET /alerts/{id}/events` — owner-scoped CRUD + 발화 이력
 - [ ] 발굴 후보 UI
 
 ### LLM
@@ -92,12 +96,13 @@
 - [ ] 종목 발굴 — LLM 기반 추천
 
 ### 운영 / 보안 / 배포
-- [ ] **Top4 — 알림 시스템 (텔레그램)**
-  - [ ] Phase A: `alerts` + `alert_rules` 테이블 + ORM
-  - [ ] Phase B: `alert_runner` 워커 (1분 평가) + 조건 평가 엔진 + cooldown
-  - [ ] Phase C: 텔레그램 발송 어댑터 (`TelegramAdapter`)
-  - [ ] Phase D: 최소 UI — 알림 리스트 + 수동 생성/삭제 폼 (fallback용)
-- [ ] **Top5 — AI 기반 알림 생성 (Top4 완료 후)** — LLM tool-use로 채팅에서 자연어 알림 등록. 자세한 설계는 [도메인 지식 > 알림 룰 > Top5](#top5--ai-기반-알림-생성-예정-top4-완료-후) 참조
+- [x] **Top4 — 알림 시스템 (텔레그램)** — 4종 조건 + cooldown + 채널 추상화 + 수동 UI
+  - [x] Phase A: `alert_rules` + `alert_events` 테이블 + ORM + Alembic env.py 필터
+  - [x] Phase B: `tick_alert_runner` (1분) + 조건 평가 + cooldown + LogChannel
+  - [x] Phase C: TelegramChannel (HTML parse_mode) + 설정 기반 채널 선택 + fallback
+  - [x] Phase D: `/alerts` CRUD REST + `AlertsPanel` UI
+  - [x] Phase E: 텔레그램 실제 발송 검증 완료
+- [ ] **Top5 — AI 기반 알림 생성** — LLM tool-use로 채팅에서 자연어 알림 등록. 자세한 설계는 [도메인 지식 > 알림 룰 > Top5](#top5--ai-기반-알림-생성-예정-top4-완료-후) 참조
 - [ ] Cloudflare Access 인증 (R3 — 외부 배포 직전 필수)
 - [ ] DB 백업 자동화 — pg_dump 일 1회 + 주 1회 오프사이트 (R5)
 - [ ] 시놀로지 NAS 배포
@@ -622,7 +627,8 @@ docker compose exec backend bash  # 컨테이너 진입
 - `LLM_DEFAULT_PROVIDER`, `LLM_DEFAULT_MODEL` — 클라이언트가 미지정 시 사용할 기본값
 - `LLM_DAILY_TOKEN_CAP`, `LLM_MONTHLY_TOKEN_CAP` — provider 통합 토큰 한도 (R2)
 - `LLM_MAX_OUTPUT_TOKENS` — 응답 1회당 출력 토큰 cap
-- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — 알림
+- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — 알림 (텔레그램 봇 발행 + getUpdates로 chat_id 획득)
+- `ALERT_CHANNEL` — `"log"`(기본, dev) 또는 `"telegram"`. telegram + 토큰/chat_id 모두 설정 시에만 실제 발송, 아니면 log fallback
 - `AUTH_PASSWORD` — 본인용 단순 인증
 - `LOG_LEVEL` — `INFO` (기본), `DEBUG`
 - `ENABLED_MARKETS` — 활성 시장 (예: `KR` 또는 `KR,US`). Phase 2부터 의미 있음.
