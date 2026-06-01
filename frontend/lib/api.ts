@@ -83,6 +83,13 @@ export interface ChatRequest {
   model?: string;
 }
 
+export interface PendingAction {
+  tool_call_id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+  summary: string;
+}
+
 export interface ChatResponse {
   answer: string;
   instrument: string;
@@ -92,6 +99,19 @@ export interface ChatResponse {
   output_tokens: number;
   context_preview: string;
   session_id: number | null;
+  pending_actions: PendingAction[];
+}
+
+export interface ToolConfirmRequest {
+  session_id?: number | null;
+  tool_call_id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface ToolConfirmResponse {
+  ok: boolean;
+  result: string;
 }
 
 export interface ChatSessionSummary {
@@ -224,6 +244,15 @@ export function getLLMModels(): Promise<LLMModelsResponse> {
 
 export function chat(body: ChatRequest): Promise<ChatResponse> {
   return http<ChatResponse>("/chat", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function confirmTool(
+  body: ToolConfirmRequest,
+): Promise<ToolConfirmResponse> {
+  return http<ToolConfirmResponse>("/chat/tool-confirm", {
     method: "POST",
     body: JSON.stringify(body),
   });

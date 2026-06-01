@@ -12,10 +12,10 @@ import {
 
 import {
   type ChatSessionSummary,
-  type ChatTurn,
   type LLMModelInfo,
+  type PendingAction,
   chat,
-  createChatSession,
+  confirmTool,
   deleteChatSession,
   getChatSession,
   getLLMModels,
@@ -28,6 +28,20 @@ interface Props {
 }
 
 const MODEL_STORAGE_KEY = "stock-advisor:llm-model";
+
+type ActionStatus = "pending" | "confirming" | "confirmed" | "cancelled" | "error";
+
+interface DisplayAction {
+  pending: PendingAction;
+  status: ActionStatus;
+  result?: string;
+}
+
+interface DisplayMessage {
+  role: "user" | "assistant";
+  content: string;
+  actions?: DisplayAction[];
+}
 
 const TIME_FORMATTER = new Intl.DateTimeFormat("ko-KR", {
   timeZone: "Asia/Seoul",
@@ -69,7 +83,7 @@ export function ChatPanel({ exchange, symbol }: Props) {
   const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
 
   // ----- Conversation -----
-  const [history, setHistory] = useState<ChatTurn[]>([]);
+  const [history, setHistory] = useState<DisplayMessage[]>([]);
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>("");
@@ -237,14 +251,60 @@ export function ChatPanel({ exchange, symbol }: Props) {
     [models, selectedKey],
   );
 
+  const updateAction = useCallback(
+    (msgIdx: number, actionIdx: number, patch: Partial<DisplayAction>) => {
+      setHistory((prev) => {
+        const next = [...prev];
+        const msg = next[msgIdx];
+        if (!msg?.actions) return prev;
+        const updatedActions = [...msg.actions];
+        updatedActions[actionIdx] = { ...updatedActions[actionIdx], ...patch };
+        next[msgIdx] = { ...msg, actions: updatedActions };
+        return next;
+      });
+    },
+    [],
+  );
+
+  const handleConfirmAction = useCallback(
+    async (msgIdx: number, actionIdx: number, action: DisplayAction) => {
+      updateAction(msgIdx, actionIdx, { status: "confirming" });
+      try {
+        const res = await confirmTool({
+          session_id: activeSessionId,
+          tool_call_id: action.pending.tool_call_id,
+          name: action.pending.name,
+          arguments: action.pending.arguments,
+        });
+        updateAction(msgIdx, actionIdx, {
+          status: res.ok ? "confirmed" : "error",
+          result: res.result,
+        });
+      } catch (err) {
+        updateAction(msgIdx, actionIdx, {
+          status: "error",
+          result: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+    [activeSessionId, updateAction],
+  );
+
+  const handleCancelAction = useCallback(
+    (msgIdx: number, actionIdx: number) => {
+      updateAction(msgIdx, actionIdx, { status: "cancelled" });
+    },
+    [updateAction],
+  );
+
   const handleSubmit = useCallback(
     async (e: FormEvent) => {
       e.preventDefault();
       const q = question.trim();
       if (!q || loading || !selectedModel) return;
 
-      const userTurn: ChatTurn = { role: "user", content: q };
-      const nextHistory = [...history, userTurn];
+      const userTurn: DisplayMessage = { role: "user", content: q };
+      const nextHistory: DisplayMessage[] = [...history, userTurn];
       setHistory(nextHistory);
       setQuestion("");
       setLoading(true);
@@ -259,9 +319,13 @@ export function ChatPanel({ exchange, symbol }: Props) {
           provider: selectedModel.provider,
           model: selectedModel.model_id,
         });
+        const actions: DisplayAction[] | undefined =
+          res.pending_actions.length > 0
+            ? res.pending_actions.map((p) => ({ pending: p, status: "pending" }))
+            : undefined;
         setHistory([
           ...nextHistory,
-          { role: "assistant", content: res.answer },
+          { role: "assistant", content: res.answer, actions },
         ]);
         // Backend may have created a session for us.
         if (res.session_id != null && res.session_id !== activeSessionId) {
@@ -373,15 +437,26 @@ export function ChatPanel({ exchange, symbol }: Props) {
         ) : (
           <ul className="space-y-3">
             {history.map((turn, idx) => (
-              <li
-                key={idx}
-                className={
-                  turn.role === "user"
-                    ? "ml-auto max-w-[85%] rounded-lg bg-blue-600 px-3 py-2 text-sm text-white"
-                    : "mr-auto max-w-[85%] whitespace-pre-wrap rounded-lg bg-gray-100 px-3 py-2 text-sm text-gray-900"
-                }
-              >
-                {turn.content}
+              <li key={idx} className="space-y-2">
+                {turn.content && (
+                  <div
+                    className={
+                      turn.role === "user"
+                        ? "ml-auto max-w-[85%] rounded-lg bg-blue-600 px-3 py-2 text-sm text-white"
+                        : "mr-auto max-w-[85%] whitespace-pre-wrap rounded-lg bg-gray-100 px-3 py-2 text-sm text-gray-900"
+                    }
+                  >
+                    {turn.content}
+                  </div>
+                )}
+                {turn.actions?.map((action, ai) => (
+                  <ActionCard
+                    key={action.pending.tool_call_id}
+                    action={action}
+                    onConfirm={() => handleConfirmAction(idx, ai, action)}
+                    onCancel={() => handleCancelAction(idx, ai)}
+                  />
+                ))}
               </li>
             ))}
             {loading && (
@@ -418,6 +493,74 @@ export function ChatPanel({ exchange, symbol }: Props) {
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+/**
+ * 한 개의 LLM 도구 호출 제안을 표시하는 카드. 사용자가 [확인] 누를 때만
+ * 백엔드가 실제로 INSERT/DELETE 한다 — 환각 안전망.
+ */
+function ActionCard({
+  action,
+  onConfirm,
+  onCancel,
+}: {
+  action: DisplayAction;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const isDelete = action.pending.name === "delete_alert";
+  const icon = isDelete ? "🗑" : "🔔";
+  const label = isDelete ? "알림 삭제 요청" : "알림 등록 요청";
+
+  if (action.status === "confirmed") {
+    return (
+      <div className="mr-auto max-w-[85%] rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-800">
+        ✅ {action.result || "완료"}
+      </div>
+    );
+  }
+  if (action.status === "cancelled") {
+    return (
+      <div className="mr-auto max-w-[85%] rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500">
+        ❎ 취소됨 — {action.pending.summary}
+      </div>
+    );
+  }
+  if (action.status === "error") {
+    return (
+      <div className="mr-auto max-w-[85%] rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+        ⚠️ {action.result || "오류가 발생했습니다"}
+      </div>
+    );
+  }
+
+  const busy = action.status === "confirming";
+  return (
+    <div className="mr-auto max-w-[85%] rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm">
+      <div className="mb-1 text-xs font-semibold text-blue-900">
+        {icon} {label}
+      </div>
+      <div className="mb-3 text-gray-900">{action.pending.summary}</div>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={onConfirm}
+          disabled={busy}
+          className="rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {busy ? "처리 중…" : "확인"}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={busy}
+          className="rounded border border-gray-300 bg-white px-3 py-1 text-xs text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          취소
+        </button>
+      </div>
     </div>
   );
 }
