@@ -395,3 +395,34 @@ export function getDisclosures(args: {
     `/disclosures/${args.exchange}/${args.symbol}${query ? `?${query}` : ""}`,
   );
 }
+
+// ---------- News ----------
+
+export interface NewsItem {
+  id: number;
+  source: string;
+  source_id: string;
+  title: string;
+  published_at: string;
+  url: string;
+  publisher: string | null;
+}
+
+export interface NewsListResponse {
+  instrument: string;
+  count: number;
+  items: NewsItem[];
+}
+
+export function getNews(args: {
+  exchange: string;
+  symbol: string;
+  limit?: number;
+}): Promise<NewsListResponse> {
+  const qs = new URLSearchParams();
+  if (args.limit !== undefined) qs.set("limit", String(args.limit));
+  const q = qs.toString();
+  return http<NewsListResponse>(
+    `/news/${args.exchange}/${args.symbol}${q ? `?${q}` : ""}`,
+  );
+}

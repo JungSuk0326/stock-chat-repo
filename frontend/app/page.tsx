@@ -5,7 +5,7 @@ import { Suspense, useCallback, useMemo } from "react";
 
 import { AlertsPanel } from "@/components/AlertsPanel";
 import { ChatPanel } from "@/components/ChatPanel";
-import { DisclosurePanel } from "@/components/DisclosurePanel";
+import { MarketFeedPanel } from "@/components/MarketFeedPanel";
 import { PriceChart } from "@/components/PriceChart";
 import { WatchlistPanel } from "@/components/WatchlistPanel";
 
@@ -77,8 +77,8 @@ function PageBody() {
           </div>
 
           <div className="mt-4">
-            <DisclosurePanel
-              key={`disclosures:${selected.exchange}:${selected.symbol}`}
+            <MarketFeedPanel
+              key={`feed:${selected.exchange}:${selected.symbol}`}
               exchange={selected.exchange}
               symbol={selected.symbol}
             />
