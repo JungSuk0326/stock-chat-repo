@@ -21,6 +21,7 @@ from app.core.redis_client import ping_redis, redis_client
 from app.llm.budget import LLMBudget
 from app.llm.registry import LLMRegistry
 from app.services.market.kr import KrMarketAdapter
+from app.workers.heartbeat import classify, read_all as read_heartbeats
 
 settings = get_settings()
 configure_logging(settings.ENVIRONMENT, settings.LOG_LEVEL)
@@ -91,8 +92,35 @@ app.include_router(alerts_api.router)
 async def health(response: Response) -> dict[str, object]:
     db_ok = await ping_db()
     redis_ok = await ping_redis()
-    all_ok = db_ok and redis_ok
 
+    # Worker heartbeats (R1). Only meaningful when Redis is up; if Redis
+    # is down we already report degraded above.
+    #
+    # `stale` is treated as a degraded condition (was working, now isn't).
+    # `never` is NOT — could just be a fresh worker boot before the first
+    # cron has fired. /health stays generous so monitoring stays sane on
+    # restarts.
+    workers: dict[str, dict[str, object]] = {}
+    any_stale = False
+    if redis_ok:
+        import time as _time
+
+        now = _time.time()
+        for hb in await read_heartbeats(redis_client):
+            state = classify(hb, now=now)
+            workers[hb.job] = {
+                "status": state,
+                "last_ok_ts": hb.last_ok_ts,
+                "last_run_ts": hb.last_run_ts,
+                "age_seconds": (
+                    int(now - hb.last_ok_ts) if hb.last_ok_ts else None
+                ),
+                "last_error": hb.error,
+            }
+            if state == "stale":
+                any_stale = True
+
+    all_ok = db_ok and redis_ok and not any_stale
     if not all_ok:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
 
@@ -104,4 +132,5 @@ async def health(response: Response) -> dict[str, object]:
             "db": "ok" if db_ok else "fail",
             "redis": "ok" if redis_ok else "fail",
         },
+        "workers": workers,
     }

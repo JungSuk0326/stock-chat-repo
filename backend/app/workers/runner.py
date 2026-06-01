@@ -35,6 +35,7 @@ from app.services.alert_channels.base import AlertChannel
 from app.services.alert_channels.log import LogChannel
 from app.services.alert_channels.telegram import TelegramChannel
 from app.services.alerts import tick_alert_runner
+from app.workers.heartbeat import with_heartbeat
 from app.services.disclosure.kr import DartAdapter
 from app.services.disclosures import (
     sync_corp_codes,
@@ -287,8 +288,10 @@ async def main() -> None:
     # Reconcile job: every N seconds thereafter.
     # NOTE: do NOT pass next_run_time=None — APScheduler reads it literally and
     # the job never fires. Omit and let the interval trigger decide.
+    # All scheduled jobs below are wrapped in with_heartbeat so /health can
+    # show "last successful run" per job (R1).
     scheduler.add_job(
-        reconcile_watchlist,
+        with_heartbeat(redis_client, "watchlist_sync", reconcile_watchlist),
         "interval",
         seconds=WATCHLIST_SYNC_INTERVAL_SECONDS,
         id="watchlist_sync",
@@ -300,7 +303,7 @@ async def main() -> None:
     # Last `EOD_SYNC_LOOKBACK_DAYS` days are re-pulled for every watchlist
     # symbol. Idempotent UPSERT, so catching up after worker downtime is free.
     scheduler.add_job(
-        sync_eod_watchlist,
+        with_heartbeat(redis_client, "eod_sync_daily", sync_eod_watchlist),
         CronTrigger(hour=16, minute=0, timezone="Asia/Seoul"),
         args=[kr_adapter, EOD_SYNC_LOOKBACK_DAYS],
         id="eod_sync_daily",
@@ -312,7 +315,7 @@ async def main() -> None:
     # Daily instrument-master refresh at 06:00 KST (well before market open).
     # Catches new listings and name changes. Idempotent UPSERT.
     scheduler.add_job(
-        sync_kr_instruments,
+        with_heartbeat(redis_client, "instruments_sync_daily", sync_kr_instruments),
         CronTrigger(hour=6, minute=0, timezone="Asia/Seoul"),
         args=[kr_adapter],
         id="instruments_sync_daily",
@@ -326,7 +329,7 @@ async def main() -> None:
     # away. Silent no-op if DART_API_KEY isn't configured.
     if dart_adapter.configured:
         scheduler.add_job(
-            sync_corp_codes,
+            with_heartbeat(redis_client, "dart_corp_code_sync_daily", sync_corp_codes),
             CronTrigger(hour=5, minute=30, timezone="Asia/Seoul"),
             args=[dart_adapter],
             id="dart_corp_code_sync_daily",
@@ -337,7 +340,7 @@ async def main() -> None:
         # Per-minute disclosure poll across the watchlist. Date range is
         # [today-1, today] KST inside the tick — see disclosure_poll_tick.
         scheduler.add_job(
-            disclosure_poll_tick,
+            with_heartbeat(redis_client, "disclosure_poll", disclosure_poll_tick),
             "interval",
             seconds=DISCLOSURE_POLL_INTERVAL_SECONDS,
             args=[dart_adapter],
@@ -351,7 +354,7 @@ async def main() -> None:
     # evaluations even if a tick runs long; cooldown_minutes on each rule
     # provides the user-facing dedup window.
     scheduler.add_job(
-        tick_alert_runner,
+        with_heartbeat(redis_client, "alert_runner", tick_alert_runner),
         "interval",
         seconds=ALERT_INTERVAL_SECONDS,
         args=[redis_client, alert_channel],
