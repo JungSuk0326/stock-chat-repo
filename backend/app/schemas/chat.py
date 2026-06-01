@@ -1,3 +1,5 @@
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -33,6 +35,18 @@ class ChatRequest(BaseModel):
     model: str | None = Field(default=None, max_length=64)
 
 
+class PendingAction(BaseModel):
+    """A tool call the LLM wants to perform but that needs user
+    confirmation before it actually runs. UI renders a card per item;
+    confirmed ones go to POST /chat/tool-confirm with the same shape.
+    """
+
+    tool_call_id: str
+    name: str
+    arguments: dict[str, Any]
+    summary: str  # one-line preview ("NAVER 26만 돌파 알림 등록")
+
+
 class ChatResponse(BaseModel):
     answer: str
     instrument: str  # canonical id
@@ -42,6 +56,19 @@ class ChatResponse(BaseModel):
     output_tokens: int
     context_preview: str  # for debugging / transparency
     session_id: int | None = None  # null only for ephemeral mode
+    pending_actions: list[PendingAction] = Field(default_factory=list)
+
+
+class ToolConfirmRequest(BaseModel):
+    session_id: int | None = None  # to append a confirmation note to the transcript
+    tool_call_id: str
+    name: str = Field(..., max_length=64)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolConfirmResponse(BaseModel):
+    ok: bool
+    result: str
 
 
 class LLMModelInfo(BaseModel):
