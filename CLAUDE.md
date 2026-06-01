@@ -18,7 +18,7 @@
 
 ## 현재 진행 상태
 
-마지막 갱신: 2026-06-01 (Task Top5 — AI 기반 알림 생성 (LLM tool-use)까지)
+마지막 갱신: 2026-06-02 (R1 헬스 메트릭 + R5 DB 백업까지)
 
 ### 기반 구조
 - [x] CLAUDE.md 초안 + 멀티마켓/발굴 섹션 + Skill routing
@@ -59,7 +59,8 @@
 - [x] **DART 공시 수집 워커** — 1분 폴링, watchlist 전체 종목 [today-1, today] KST
 - [x] **신규 watchlist 종목 공시 backfill** — 가입 시점 6개월치 fire-and-forget
 - [x] **알림 평가 워커** — 1분 폴링, 활성 룰 전체 평가, cooldown 적용, 발화 시 채널로 발송
-- [ ] 헬스체크 메트릭 (R1)
+- [x] **헬스체크 메트릭 (R1)** — `app/workers/heartbeat.py`, 6개 잡 + backup 추적, `/health.workers` 노출, stale → 503
+- [x] **DB 백업 워커 (R5)** — `app/workers/backup.py`, 매일 03:30 KST `pg_dump | gzip`, BACKUP_RETENTION_DAYS 자동 정리, 오프사이트는 호스트 hyper backup
 - [ ] 네이버 금융 뉴스 + RSS 수집
 - [ ] 종토방 크롤링 + 감성 분류 (claude-haiku)
 
@@ -111,8 +112,9 @@
   - [x] Phase A: `LLMClient.ask(tools=...)` + Anthropic + Gemini 어댑터 + `ToolDef`/`ToolCall`/`ToolResult`
   - [x] Phase B: `app/llm/tools.py` 도구 3종 + `/chat` multi-turn loop + `/chat/tool-confirm` 엔드포인트
   - [x] Phase C: `ChatPanel` 확인 카드 (`ActionCard`) UI + CustomEvent로 `AlertsPanel` 즉시 반영
+- [x] **R1 헬스 메트릭** — 워커 잡별 heartbeat (Redis), `/health.workers` 잡 상태 노출, stale → 503
+- [x] **R5 DB 백업 자동화** — 매일 03:30 KST `pg_dump | gzip` → `./backups/`, 14일 보존, 오프사이트는 호스트 hyper backup 단계
 - [ ] Cloudflare Access 인증 (R3 — 외부 배포 직전 필수)
-- [ ] DB 백업 자동화 — pg_dump 일 1회 + 주 1회 오프사이트 (R5)
 - [ ] 시놀로지 NAS 배포
 
 ### Phase 2 이상
@@ -647,6 +649,8 @@ docker compose exec backend bash  # 컨테이너 진입
 - `LLM_MAX_OUTPUT_TOKENS` — 응답 1회당 출력 토큰 cap
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — 알림 (텔레그램 봇 발행 + getUpdates로 chat_id 획득)
 - `ALERT_CHANNEL` — `"log"`(기본, dev) 또는 `"telegram"`. telegram + 토큰/chat_id 모두 설정 시에만 실제 발송, 아니면 log fallback
+- `BACKUP_DIR` — 매일 `pg_dump | gzip` 출력 경로 (기본 `/backups`, docker compose에서 `./backups`로 마운트). 호스트 워커로 돌릴 때는 별도 경로 + 로컬 `pg_dump` major 버전이 서버와 일치해야 함 (현재 서버 = pg16, Homebrew 기본 14는 안 됨 → `brew install postgresql@16`)
+- `BACKUP_RETENTION_DAYS` — 보존 일수 (기본 14)
 - `AUTH_PASSWORD` — 본인용 단순 인증
 - `LOG_LEVEL` — `INFO` (기본), `DEBUG`
 - `ENABLED_MARKETS` — 활성 시장 (예: `KR` 또는 `KR,US`). Phase 2부터 의미 있음.
