@@ -294,7 +294,7 @@ export function ChatPanel({ exchange, symbol }: Props) {
   );
 
   return (
-    <div className="flex h-[640px] flex-col rounded-lg bg-white shadow">
+    <div className="flex h-[calc(100vh-3rem)] flex-col rounded-lg bg-white shadow">
       {/* Header row 1: session selector + new + delete */}
       <div className="flex items-center gap-2 border-b border-gray-100 p-3">
         <select
