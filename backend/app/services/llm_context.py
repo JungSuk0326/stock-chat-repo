@@ -3,7 +3,7 @@
 CLAUDE.md priority (high → low):
   1. 현재가, 등락률, 거래량
   2. 당일/최근 공시 헤드라인
-  3. 최근 24h 뉴스 헤드라인           ← 미구현
+  3. 최근 24h 뉴스 헤드라인
   4. 커뮤니티 감성 집계               ← 미구현
   5. 기술적 지표 (이동평균, RSI 등)
   6. 과거 차트 요약 (1주/1개월 추세)
@@ -26,13 +26,18 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Disclosure, Instrument, Price
+from app.models import Disclosure, Instrument, NewsItem, Price
 
 # Disclosure window for the LLM context. Last N days, capped to MAX entries.
 # Samsung-class large caps file ~10/day (mostly operator share transactions);
 # the cap keeps the prompt bounded while a date floor keeps stale items out.
 DISCLOSURE_WINDOW_DAYS = 14
 DISCLOSURE_MAX_COUNT = 20
+
+# News window. Last 24h covers "what's moving the price right now";
+# anything older is rarely the proximate cause of today's behavior.
+NEWS_WINDOW_HOURS = 24
+NEWS_MAX_COUNT = 15
 
 log = structlog.get_logger()
 
@@ -45,6 +50,16 @@ class DisclosureSummary:
     filed_at: datetime  # UTC
     title: str
     submitter: str | None
+
+
+@dataclass
+class NewsHeadline:
+    """One news headline for the LLM. publisher provides minimal source
+    attribution without exposing full article text."""
+
+    published_at: datetime  # UTC
+    title: str
+    publisher: str | None
 
 
 @dataclass
@@ -76,6 +91,7 @@ class LLMContext:
     recent_bars_count: int
 
     recent_disclosures: list[DisclosureSummary] = field(default_factory=list)
+    recent_news: list[NewsHeadline] = field(default_factory=list)
 
     def as_text(self) -> str:
         ccy = self.currency
@@ -128,6 +144,19 @@ class LLMContext:
                 lines.append(f"- {date_part}{submitter}: {d.title}")
         else:
             lines.append("- (해당 기간 공시 없음)")
+        lines.append("")
+
+        # 3. 최근 뉴스 헤드라인 — 본문 X (저작권/약관 + 토큰 예산)
+        lines.append(
+            f"### 최근 뉴스 (최근 {NEWS_WINDOW_HOURS}시간, 최대 {NEWS_MAX_COUNT}건)"
+        )
+        if self.recent_news:
+            for n in self.recent_news:
+                time_part = n.published_at.strftime("%m-%d %H:%M")
+                publisher = f" · {n.publisher}" if n.publisher else ""
+                lines.append(f"- {time_part}{publisher}: {n.title}")
+        else:
+            lines.append("- (해당 기간 뉴스 없음)")
         lines.append("")
 
         # 5. 기술적 지표
@@ -285,6 +314,33 @@ async def assemble_context(
         for d in disclosure_rows
     ]
 
+    # Recent news (priority 3). 24h window — anything older rarely explains
+    # today's price action, and the daily prompt cost goes up otherwise.
+    news_cutoff = datetime.now(timezone.utc) - timedelta(hours=NEWS_WINDOW_HOURS)
+    news_rows = (
+        (
+            await db.execute(
+                select(NewsItem)
+                .where(
+                    NewsItem.instrument_id == instrument.id,
+                    NewsItem.published_at >= news_cutoff,
+                )
+                .order_by(NewsItem.published_at.desc(), NewsItem.id.desc())
+                .limit(NEWS_MAX_COUNT)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    recent_news = [
+        NewsHeadline(
+            published_at=n.published_at,
+            title=n.title,
+            publisher=n.publisher,
+        )
+        for n in news_rows
+    ]
+
     return LLMContext(
         canonical_id=f"{instrument.exchange}:{instrument.symbol}",
         name=instrument.name,
@@ -305,6 +361,7 @@ async def assemble_context(
         rsi14=_rsi(closes, 14),
         recent_bars_count=len(bars),
         recent_disclosures=recent_disclosures,
+        recent_news=recent_news,
     )
 
 

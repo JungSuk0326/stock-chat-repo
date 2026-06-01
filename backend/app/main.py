@@ -11,6 +11,7 @@ from app.api import chat_sessions as chat_sessions_api
 from app.api import disclosures as disclosures_api
 from app.api import instruments as instruments_api
 from app.api import llm as llm_api
+from app.api import news as news_api
 from app.api import prices as prices_api
 from app.api import watchlist as watchlist_api
 from app.api import ws_prices as ws_prices_api
@@ -85,6 +86,7 @@ app.include_router(chat_sessions_api.router)  # before chat_api so /chat/session
 app.include_router(chat_api.router)
 app.include_router(llm_api.router)
 app.include_router(disclosures_api.router)
+app.include_router(news_api.router)
 app.include_router(alerts_api.router)
 
 
