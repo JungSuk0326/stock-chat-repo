@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     # to "log" at runtime if either is missing.
     ALERT_CHANNEL: str = "log"
 
+    # DB backup (R5). Daily pg_dump → gzipped file under BACKUP_DIR.
+    # In docker-compose the worker mounts ./backups → /backups; locally
+    # the relative path resolves against the worker's CWD.
+    BACKUP_DIR: str = "/backups"
+    BACKUP_RETENTION_DAYS: int = 14
+
     # LLM
     # Default provider/model when the client doesn't specify one. Catalog
     # filters by which keys are set (no key → not offered to the UI).

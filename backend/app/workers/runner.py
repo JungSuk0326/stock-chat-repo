@@ -35,6 +35,7 @@ from app.services.alert_channels.base import AlertChannel
 from app.services.alert_channels.log import LogChannel
 from app.services.alert_channels.telegram import TelegramChannel
 from app.services.alerts import tick_alert_runner
+from app.workers.backup import run_backup
 from app.workers.heartbeat import with_heartbeat
 from app.services.disclosure.kr import DartAdapter
 from app.services.disclosures import (
@@ -362,6 +363,18 @@ async def main() -> None:
         coalesce=True,
         max_instances=1,
         misfire_grace_time=ALERT_INTERVAL_SECONDS,
+    )
+
+    # Daily DB backup at 03:30 KST — quiet hour, before the morning
+    # instrument/corp_code refreshes. Failures land in /health as
+    # `backup_daily` heartbeat (R5).
+    scheduler.add_job(
+        with_heartbeat(redis_client, "backup_daily", run_backup),
+        CronTrigger(hour=3, minute=30, timezone="Asia/Seoul"),
+        id="backup_daily",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
     )
 
     scheduler.start()

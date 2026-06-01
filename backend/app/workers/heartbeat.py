@@ -37,6 +37,7 @@ HEARTBEAT_EXPECTATIONS: dict[str, int] = {
     "eod_sync_daily": 25 * 3600,
     "instruments_sync_daily": 25 * 3600,
     "dart_corp_code_sync_daily": 25 * 3600,
+    "backup_daily": 25 * 3600,
 }
 
 

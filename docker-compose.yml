@@ -60,6 +60,11 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379/0
+      BACKUP_DIR: /backups
+    volumes:
+      # Daily pg_dump output lands here (R5). Operator points off-site
+      # backup (Synology Hyper Backup / B2 / S3) at the host side path.
+      - ./backups:/backups
     # No ports exposed — worker has zero external attack surface.
     depends_on:
       postgres:
