@@ -80,7 +80,19 @@ export function AlertsPanel({ exchange, symbol }: Props) {
   useEffect(() => {
     void refresh();
     const id = window.setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
-    return () => window.clearInterval(id);
+    // ChatPanel emits this after a tool-confirm so the panel reflects the
+    // change immediately without waiting for the next polling tick.
+    const onAlertsChanged = () => {
+      void refresh();
+    };
+    window.addEventListener("stock-advisor:alerts-changed", onAlertsChanged);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener(
+        "stock-advisor:alerts-changed",
+        onAlertsChanged,
+      );
+    };
   }, [refresh]);
 
   const handleCreate = useCallback(

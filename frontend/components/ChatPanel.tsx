@@ -280,6 +280,11 @@ export function ChatPanel({ exchange, symbol }: Props) {
           status: res.ok ? "confirmed" : "error",
           result: res.result,
         });
+        // Notify AlertsPanel (or anyone else interested) so the change is
+        // visible immediately instead of waiting for the 30s polling tick.
+        if (res.ok && typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("stock-advisor:alerts-changed"));
+        }
       } catch (err) {
         updateAction(msgIdx, actionIdx, {
           status: "error",
