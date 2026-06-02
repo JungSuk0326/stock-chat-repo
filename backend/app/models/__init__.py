@@ -8,6 +8,7 @@ from app.models.alert import AlertEvent, AlertRule
 from app.models.base import Base
 from app.models.chat import ChatMessage, ChatSession
 from app.models.disclosure import CorpCode, Disclosure
+from app.models.discovery import Candidate, Screener
 from app.models.fundamentals import FundamentalsSnapshot
 from app.models.instrument import Instrument
 from app.models.news import NewsItem
@@ -19,6 +20,7 @@ __all__ = [
     "AlertEvent",
     "AlertRule",
     "Base",
+    "Candidate",
     "ChatMessage",
     "ChatSession",
     "CorpCode",
@@ -28,6 +30,7 @@ __all__ = [
     "NewsItem",
     "OWNER_USER_ID",
     "Price",
+    "Screener",
     "User",
     "WatchlistEntry",
 ]
