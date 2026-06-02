@@ -18,6 +18,7 @@ yfinance .info quirks observed against real KR symbols:
 from __future__ import annotations
 
 import asyncio
+import math
 from decimal import Decimal
 from typing import Any
 
@@ -76,11 +77,20 @@ def _info_to_data(symbol: str, info: dict[str, Any]) -> FundamentalsData:
 
 
 def _dec(v: Any) -> Decimal | None:
+    """Convert yfinance numeric to Decimal. yfinance occasionally returns
+    Infinity (e.g. forwardPE for symbols with 0/negative earnings) — those
+    are rejected upstream by Pydantic's `finite_number` validator, so we
+    drop to None here."""
     if v is None:
         return None
     try:
-        # str() detour preserves precision for floats from yfinance JSON
-        return Decimal(str(v))
+        f = float(v)
+    except (ValueError, TypeError):
+        return None
+    if not math.isfinite(f):
+        return None
+    try:
+        return Decimal(str(f))
     except (ValueError, TypeError):
         return None
 

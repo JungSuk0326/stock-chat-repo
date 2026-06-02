@@ -43,6 +43,7 @@ from app.services.disclosures import (
     sync_disclosures_for_symbol,
     sync_disclosures_watchlist,
 )
+from app.services.discovery import run_all_enabled_screeners
 from app.services.fundamentals.kr import YFinanceKrAdapter
 from app.services.fundamentals_sync import refresh_watchlist as refresh_fundamentals_watchlist
 from app.services.instruments import sync_kr_instruments
@@ -472,6 +473,23 @@ async def main() -> None:
         CronTrigger(hour=17, minute=0, timezone="Asia/Seoul"),
         args=[fundamentals_adapter],
         id="fundamentals_refresh_daily",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
+    # Daily screener run at 17:30 KST — after EOD prices (16:00) and
+    # fundamentals refresh (17:00). Walks every enabled screener and
+    # writes candidates. On-demand re-runs available via REST in Phase C.
+    scheduler.add_job(
+        with_heartbeat(
+            redis_client,
+            "screener_run_daily",
+            run_all_enabled_screeners,
+        ),
+        CronTrigger(hour=17, minute=30, timezone="Asia/Seoul"),
+        args=[fundamentals_adapter],
+        id="screener_run_daily",
         coalesce=True,
         max_instances=1,
         misfire_grace_time=3600,
