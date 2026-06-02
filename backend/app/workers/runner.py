@@ -43,6 +43,8 @@ from app.services.disclosures import (
     sync_disclosures_for_symbol,
     sync_disclosures_watchlist,
 )
+from app.services.fundamentals.kr import YFinanceKrAdapter
+from app.services.fundamentals_sync import refresh_watchlist as refresh_fundamentals_watchlist
 from app.services.instruments import sync_kr_instruments
 from app.services.market.kr import KrMarketAdapter
 from app.services.news.kr import NaverNewsAdapter
@@ -272,6 +274,10 @@ async def main() -> None:
     # keeps us well below visible thresholds.
     news_adapter = NaverNewsAdapter()
 
+    # Fundamentals adapter — yfinance backend. No API key, but rate-limited
+    # implicitly by Yahoo; refresh_fundamentals_watchlist caps concurrency.
+    fundamentals_adapter = YFinanceKrAdapter()
+
     # Active pollers, keyed by canonical id "EX:SYM".
     pollers: dict[str, PricePoller] = {}
 
@@ -453,6 +459,24 @@ async def main() -> None:
         misfire_grace_time=NEWS_POLL_INTERVAL_SECONDS,
     )
 
+    # Daily fundamentals refresh at 17:00 KST (after EOD price sync at 16:00,
+    # so any PER/PBR/marketCap re-computations Yahoo did during the day
+    # are settled). Watchlist-only — wider universes are pulled on-demand
+    # by screener runs (Top7). Cache TTL is 24h either way.
+    scheduler.add_job(
+        with_heartbeat(
+            redis_client,
+            "fundamentals_refresh_daily",
+            refresh_fundamentals_watchlist,
+        ),
+        CronTrigger(hour=17, minute=0, timezone="Asia/Seoul"),
+        args=[fundamentals_adapter],
+        id="fundamentals_refresh_daily",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
     scheduler.start()
 
     # Wait for SIGINT/SIGTERM so docker compose stop is graceful.
@@ -468,6 +492,7 @@ async def main() -> None:
     await kr_adapter.aclose()
     await dart_adapter.aclose()
     await news_adapter.aclose()
+    await fundamentals_adapter.aclose()
     await alert_channel.aclose()
     await redis_client.aclose()
 

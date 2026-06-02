@@ -18,6 +18,7 @@ dependencies = [
     "httpx>=0.28.1",
     "anthropic>=0.104.1",
     "google-genai>=2.7.0",
+    "yfinance>=1.4.1",
 ]
 
 [project.optional-dependencies]
