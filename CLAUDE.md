@@ -18,7 +18,7 @@
 
 ## 현재 진행 상태
 
-마지막 갱신: 2026-06-02 (Top6 — 뉴스 수집 + 컨텍스트 합류 + 공시/뉴스 탭 UI까지)
+마지막 갱신: 2026-06-03 (Top8 — 투자자 수급 (외국인/기관/개인) 탭 + LLM 컨텍스트 합류까지)
 
 ### 기반 구조
 - [x] CLAUDE.md 초안 + 멀티마켓/발굴 섹션 + Skill routing
@@ -41,8 +41,10 @@
 - [x] `alert_rules` 테이블 — user_id + instrument_id + condition_type + threshold + cooldown_minutes + market_hours_only + last_triggered_at
 - [x] `alert_events` 테이블 — rule_id FK + fired_at + triggered_value + channel + delivery_status (발화 이력/디버깅)
 - [x] `news_items` 테이블 — instrument_id FK + source/source_id + title + published_at(UTC) + url + publisher (본문 X)
+- [x] `investor_flows` 테이블 — instrument_id FK + trade_date + foreign/institutional/individual net_volume + foreign_hold_ratio (외국인/기관/개인 일일 순매수)
 - [ ] `community_signals` 테이블
-- [ ] `screeners`, `candidates`, `fundamentals_snapshot` 테이블 (발굴)
+- [x] `fundamentals_snapshot` 테이블 — yfinance 캐시 (Top7)
+- [x] `screeners`, `candidates` 테이블 (Top7)
 
 ### KR 데이터 수집 (Phase 1)
 - [x] `KrMarketAdapter.fetch_instruments()` — FDR로 KOSPI/KOSDAQ 2,649개 적재
@@ -63,6 +65,9 @@
 - [x] **헬스체크 메트릭 (R1)** — `app/workers/heartbeat.py`, 6개 잡 + backup 추적, `/health.workers` 노출, stale → 503
 - [x] **DB 백업 워커 (R5)** — `app/workers/backup.py`, 매일 03:30 KST `pg_dump | gzip`, BACKUP_RETENTION_DAYS 자동 정리, 오프사이트는 호스트 hyper backup
 - [x] **네이버 금융 뉴스 수집 워커** — 5분 폴링, watchlist 전체, 신규 종목 50건 backfill, 본문 X (헤드라인만)
+- [x] **투자자 수급 수집 워커 (Top8)** — 일일 16:30 KST cron, Naver trend API로 외국인/기관/개인 순매수 + 외국인 보유율 적재. 신규 watchlist 종목 60일 backfill
+- [x] **yfinance fundamentals 일일 refresh** — 17:00 KST cron, watchlist 종목 PER/PBR/시총/배당수익률 (Top7)
+- [x] **스크리너 일일 실행** — 17:30 KST cron, 활성 screeners → candidates 적재 (Top7)
 - [ ] RSS 뉴스 (한경/매경/연합 — Phase 2 또는 필요 시)
 - [ ] 종토방 크롤링 + 감성 분류 (claude-haiku)
 
@@ -79,9 +84,10 @@
 - [x] `POST /chat` — provider/model 선택, 컨텍스트 자동 주입, session_id 처리 (3 모드: 이어쓰기/자동생성/ephemeral), **multi-turn tool use**
 - [x] **`GET/POST/DELETE /chat/sessions`** — 세션 CRUD (owner-scoped, get_current_user_id 의존성)
 - [x] **`POST /chat/tool-confirm`** — LLM이 제안한 쓰기 도구를 사용자 확인 후 실행
-- [x] **시장 피드 UI** (`MarketFeedPanel`, 옛 `DisclosurePanel`) — 차트 아래 [공시][뉴스] 탭, localStorage로 활성 탭 영속, 60초 자동 새로고침
+- [x] **시장 피드 UI** (`MarketFeedPanel`) — 차트 아래 [공시][뉴스][수급] 3개 탭, localStorage 활성 탭 영속, 60초 자동 새로고침
 - [x] `GET /disclosures/{ex}/{sym}` — 종목별 최근 공시 (헤드라인만)
 - [x] `GET /news/{ex}/{sym}` — 종목별 최근 뉴스 (헤드라인 + publisher + URL)
+- [x] `GET /investor-flows/{ex}/{sym}` — 종목별 일별 외국인/기관/개인 순매수 + 외국인 보유율 (Top8)
 - [x] **알림 UI** (`AlertsPanel`) — 조건 드롭다운 + 임계값 + 이름, 켜기/끄기 토글, 삭제, 30초 자동 새로고침 + ChatPanel 확인 시 CustomEvent로 즉시 반영
 - [x] `GET/POST/PATCH/DELETE /alerts` + `GET /alerts/{id}/events` — owner-scoped CRUD + 발화 이력
 - [x] **차트 지표 토글** (`ChartSettings`) — SMA(5/20/60/120) / EMA(12/26) / Bollinger(20,2σ) / RSI(14, 별도 페인), localStorage 영속
@@ -100,9 +106,11 @@
 - [x] **LLM tool-use 인프라** — `LLMClient.ask(tools=...)`, Anthropic + Gemini 정규화, multi-turn round-trip (`ChatMessage.tool_calls`/`tool_results`)
 - [x] **알림 도구 3종** (`app/llm/tools.py`) — `list_alerts` (READ, 즉시) / `create_alert_rule` (WRITE, 확인 후) / `delete_alert` (WRITE, 확인 후). 실행 함수는 `app.services.alert_rules`와 동일 경로 공유
 - [x] **뉴스 헤드라인 합류** — 최근 24시간 / 최대 15건, 헤드라인 + 언론사만 (본문 X)
+- [x] **수급 요약 합류 (Top8)** — 최근 5거래일 외국인/기관/개인 누적 순매수 + 매수일/매도일 카운트 + 외국인 보유율 (priority #4 자리)
+- [x] **fundamentals 컨텍스트는 미합류** — 별도 스크리너 평가에만 사용 (LLM 답변엔 노출 안 됨, 필요시 도구로 fetch)
+- [x] **종목 발굴 — 조건 스크리닝 (Top7 백엔드 완료)** — 평가 엔진 + 일일 17:30 cron 동작. REST/UI 미완성
+- [ ] 종목 발굴 — LLM 기반 추천 (Top5 tool-use 패턴 재사용)
 - [ ] 종토방 감성 집계 합류 (감성 분류 후)
-- [ ] 종목 발굴 — 조건 스크리닝
-- [ ] 종목 발굴 — LLM 기반 추천
 
 ### 운영 / 보안 / 배포
 - [x] **Top4 — 알림 시스템 (텔레그램)** — 4종 조건 + cooldown + 채널 추상화 + 수동 UI
