@@ -316,13 +316,15 @@ function FlowList({ items }: { items: InvestorFlowItem[] }) {
   return (
     <table className="w-full text-xs">
       <thead className="text-gray-500">
-        <tr className="border-b border-gray-200">
-          <th className="py-1.5 text-left font-medium">날짜</th>
-          <th className="py-1.5 text-right font-medium">외국인</th>
-          <th className="py-1.5 text-right font-medium">기관</th>
-          <th className="py-1.5 text-right font-medium">개인</th>
-          <th className="py-1.5 text-right font-medium">보유율</th>
-          <th className="py-1.5 text-right font-medium">종가</th>
+        {/* sticky on <th> + bg-white로 스크롤 시 행이 비치지 않게.
+            box-shadow로 헤더 아래 구분선 유지 (border는 sticky 시 끊김) */}
+        <tr>
+          <th className="sticky top-0 z-10 bg-white py-1.5 text-left font-medium shadow-[0_1px_0_0_#e5e7eb]">날짜</th>
+          <th className="sticky top-0 z-10 bg-white py-1.5 text-right font-medium shadow-[0_1px_0_0_#e5e7eb]">외국인</th>
+          <th className="sticky top-0 z-10 bg-white py-1.5 text-right font-medium shadow-[0_1px_0_0_#e5e7eb]">기관</th>
+          <th className="sticky top-0 z-10 bg-white py-1.5 text-right font-medium shadow-[0_1px_0_0_#e5e7eb]">개인</th>
+          <th className="sticky top-0 z-10 bg-white py-1.5 text-right font-medium shadow-[0_1px_0_0_#e5e7eb]">보유율</th>
+          <th className="sticky top-0 z-10 bg-white py-1.5 text-right font-medium shadow-[0_1px_0_0_#e5e7eb]">종가</th>
         </tr>
       </thead>
       <tbody>
