@@ -46,9 +46,18 @@ class Settings(BaseSettings):
     # directly via `build_krx_session()` — the only thing this declaration
     # buys us is dotenv loading + a single place to document the dependency.
     # Required for investor-flow detail (사모/연기금/투신 etc.) endpoints
-    # which KRX gated behind login.
+    # which KRX gated behind login. Used by:
+    #   - market_investor_flow_daily worker (pykrx 세분류 적재)
+    #   - discover_by_investor_flow LLM 도구 (자연어 발굴)
     KRX_ID: str = ""
     KRX_PW: str = ""
+
+    # KRX OpenAPI key (openapi.krx.co.kr) — official REST API for stock daily
+    # OHLCV + instrument basic info. Separate account from KRX_ID/PW.
+    # When set, the daily EOD price sync routes through this instead of
+    # pykrx; backfill still uses pykrx because the per-date paginated shape
+    # of the OpenAPI is wasteful for "fetch one symbol's 1-year history".
+    KRX_OPENAPI_KEY: str = ""
 
     # Alerts
     # "log" routes fires to structlog (always works, dev default).

@@ -53,8 +53,10 @@ from app.services.investor_flow_sync import (
     sync_investor_flow_watchlist,
 )
 from app.services.market.kr import KrMarketAdapter
+from app.services.market.krx_openapi import KrxOpenApiClient
 from app.services.market_investor_flow.kr import KrMarketInvestorFlowAdapter
 from app.services.market_investor_flow_sync import daily_market_investor_flow_tick
+from app.services.prices_openapi import sync_eod_watchlist_via_openapi
 from app.services.news.kr import NaverNewsAdapter
 from app.services.news_sync import sync_news_for_symbol, sync_news_watchlist
 from app.services.prices import sync_eod_prices, sync_eod_watchlist
@@ -360,6 +362,20 @@ async def main() -> None:
             ),
         )
 
+    # KRX OpenAPI (official REST). When configured, the daily EOD sweep
+    # uses this instead of pykrx. Backfill / instrument master / investor
+    # flow are unchanged. None when no key — `sync_eod_watchlist_via_openapi`
+    # would early-out, so we just skip scheduling that job.
+    krx_openapi_client: KrxOpenApiClient | None = None
+    if settings.KRX_OPENAPI_KEY:
+        krx_openapi_client = KrxOpenApiClient(api_key=settings.KRX_OPENAPI_KEY)
+        log.info("worker.krx_openapi.configured")
+    else:
+        log.info(
+            "worker.krx_openapi.fallback_pykrx",
+            note="KRX_OPENAPI_KEY not set — daily EOD sweep falls back to pykrx",
+        )
+
     # Active pollers, keyed by canonical id "EX:SYM".
     pollers: dict[str, PricePoller] = {}
 
@@ -457,18 +473,37 @@ async def main() -> None:
         max_instances=1,
     )
 
-    # Daily EOD sync at 16:00 KST (KOSPI closes 15:30; +30min buffer for pykrx).
-    # Last `EOD_SYNC_LOOKBACK_DAYS` days are re-pulled for every watchlist
-    # symbol. Idempotent UPSERT, so catching up after worker downtime is free.
-    scheduler.add_job(
-        with_heartbeat(redis_client, "eod_sync_daily", sync_eod_watchlist),
-        CronTrigger(hour=16, minute=0, timezone="Asia/Seoul"),
-        args=[kr_adapter, EOD_SYNC_LOOKBACK_DAYS],
-        id="eod_sync_daily",
-        coalesce=True,
-        max_instances=1,
-        misfire_grace_time=3600,  # if worker was down at 16:00, still run within 1h
-    )
+    # Daily EOD sync at 16:00 KST (KOSPI closes 15:30; +30min buffer for KRX
+    # to publish). Last `EOD_SYNC_LOOKBACK_DAYS` days are re-pulled to cover
+    # worker-downtime gaps; idempotent UPSERT so re-runs are cheap.
+    #
+    # Routing: prefer KRX OpenAPI (정식 REST API, fanout per-date over all
+    # listings, 1 call per (date × market)). Falls back to pykrx (per-symbol
+    # over date range) when KRX_OPENAPI_KEY isn't configured.
+    if krx_openapi_client is not None:
+        scheduler.add_job(
+            with_heartbeat(
+                redis_client,
+                "eod_sync_daily",
+                sync_eod_watchlist_via_openapi,
+            ),
+            CronTrigger(hour=16, minute=0, timezone="Asia/Seoul"),
+            args=[krx_openapi_client, EOD_SYNC_LOOKBACK_DAYS],
+            id="eod_sync_daily",
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+        )
+    else:
+        scheduler.add_job(
+            with_heartbeat(redis_client, "eod_sync_daily", sync_eod_watchlist),
+            CronTrigger(hour=16, minute=0, timezone="Asia/Seoul"),
+            args=[kr_adapter, EOD_SYNC_LOOKBACK_DAYS],
+            id="eod_sync_daily",
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+        )
 
     # Daily instrument-master refresh at 06:00 KST (well before market open).
     # Catches new listings and name changes. Idempotent UPSERT.
@@ -634,6 +669,8 @@ async def main() -> None:
     await news_adapter.aclose()
     await fundamentals_adapter.aclose()
     await investor_flow_adapter.aclose()
+    if krx_openapi_client is not None:
+        await krx_openapi_client.aclose()
     await alert_channel.aclose()
     await redis_client.aclose()
 

@@ -57,7 +57,7 @@
 - [x] **다종목 watchlist** — DB watchlist 테이블 + CRUD API + 동적 워커 (30s sync, add/remove auto)
 - [x] **종목 검색 + URL 라우팅** — `?symbol=KR:000660`, 사이드바 + SearchModal
 - [x] **신규 watchlist 종목 자동 EOD backfill** — reconcile 시점에 1년치 일봉 fire-and-forget
-- [x] **매일 EOD 일봉 sync** — 16:00 KST cron, watchlist 전체 종목 최근 7일 (멱등 UPSERT)
+- [x] **매일 EOD 일봉 sync** — 16:00 KST cron, watchlist 전체 종목 최근 7일 (멱등 UPSERT). KRX_OPENAPI_KEY 설정 시 정식 OpenAPI(per-date fanout), 미설정 시 pykrx(per-symbol) fallback
 - [x] **매일 instruments 갱신** — 06:00 KST cron, FDR로 KOSPI/KOSDAQ 전 종목 마스터 UPSERT
 - [x] **DART corp_code 동기화** (R11) — 매일 05:30 KST cron, ZIP/XML 파싱 → 상장사 ~3,900개
 - [x] **DART 공시 수집 워커** — 1분 폴링, watchlist 전체 종목 [today-1, today] KST
@@ -171,7 +171,8 @@ Multi-provider 구조. `LLMClient` ABC 뒤에 각 provider 구현을 두고, `LL
 ### 외부 데이터
 
 #### Phase 1 — 한국 (KR)
-- **시세 (일봉)**: pykrx, FinanceDataReader
+- **시세 (일봉, 일일 sync)**: KRX OpenAPI (정식, 키 설정 시) / pykrx (fallback, 백필도 담당)
+- **시세 (일봉, 1년치 백필)**: pykrx (OpenAPI는 per-date 페이지네이션이라 단일 종목 백필엔 비효율)
 - **시세 (실시간)**: 네이버 금융 모바일 API (비공식)
 - **공시**: DART OpenAPI
 - **뉴스**: 네이버 금융 뉴스, RSS (한경, 매경, 연합인포맥스)
@@ -674,6 +675,7 @@ docker compose exec backend bash  # 컨테이너 진입
 ### 한국 (Phase 1)
 - `DART_API_KEY` — DART OpenAPI
 - `KRX_ID`, `KRX_PW` — data.krx.co.kr 무료 회원 가입 후 발급. pykrx가 `os.getenv()`로 직접 읽으므로 `get_settings()` 호출 시 `os.environ.setdefault()`로 푸시. **시장 전체 투자자 세분류 (사모/연기금/투신 등) 및 자연어 발굴 (Top9) 기능에 필수.** 비워두면 해당 워커와 LLM 도구가 빈 결과 반환, 나머지는 정상 동작.
+- `KRX_OPENAPI_KEY` — openapi.krx.co.kr 별도 회원 + API 인증키 신청(1~2영업일). 시세/종목기본정보 OpenAPI (투자자별 매매동향은 미제공). 설정 시 매일 EOD sync(16:00 KST)가 OpenAPI 경로로 동작; 미설정 시 pykrx fallback. 백필은 항상 pykrx (OpenAPI는 per-date라 단일 종목 backfill엔 비효율).
 
 ### 미국 (Phase 2, 예정)
 - `FINNHUB_API_KEY` — Finnhub
