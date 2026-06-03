@@ -53,6 +53,8 @@ from app.services.investor_flow_sync import (
     sync_investor_flow_watchlist,
 )
 from app.services.market.kr import KrMarketAdapter
+from app.services.market_investor_flow.kr import KrMarketInvestorFlowAdapter
+from app.services.market_investor_flow_sync import daily_market_investor_flow_tick
 from app.services.news.kr import NaverNewsAdapter
 from app.services.news_sync import sync_news_for_symbol, sync_news_watchlist
 from app.services.prices import sync_eod_prices, sync_eod_watchlist
@@ -85,6 +87,10 @@ NEWS_BACKFILL_LIMIT = 50              # one-shot on new watchlist join
 INVESTOR_FLOW_DAILY_DAYS = 30        # daily sync window — overlaps multiple days
                                       # to absorb worker downtime
 INVESTOR_FLOW_BACKFILL_DAYS = 60      # one-shot on new watchlist join
+
+# Market-wide investor flow (KRX 세분류: 사모/연기금/투신 등). Lookback
+# overlaps a week so brief worker outages catch up; UNIQUE dedups.
+MARKET_INVESTOR_FLOW_LOOKBACK_DAYS = 7
 
 
 def _poller_job_id(exchange: str, symbol: str) -> str:
@@ -339,6 +345,21 @@ async def main() -> None:
     # caveat as prices/news; one HTTP call per symbol covers ~60 trading days.
     investor_flow_adapter = NaverTrendAdapter()
 
+    # Market-wide investor breakdown (사모/연기금/투신 etc.) via pykrx.
+    # Requires KRX_ID/KRX_PW (set in .env). pykrx logs the login attempt on
+    # first call; if creds are missing the daily job simply emits zero rows.
+    market_investor_flow_adapter = KrMarketInvestorFlowAdapter()
+    if settings.KRX_ID and settings.KRX_PW:
+        log.info("worker.krx_login.configured")
+    else:
+        log.warning(
+            "worker.krx_login.missing",
+            note=(
+                "set KRX_ID / KRX_PW in .env to enable market-wide investor "
+                "breakdown (사모/연기금/투신 etc.)"
+            ),
+        )
+
     # Active pollers, keyed by canonical id "EX:SYM".
     pollers: dict[str, PricePoller] = {}
 
@@ -572,6 +593,25 @@ async def main() -> None:
         CronTrigger(hour=16, minute=30, timezone="Asia/Seoul"),
         args=[investor_flow_adapter],
         id="investor_flow_sync_daily",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
+    # Daily KRX market-wide investor breakdown at 16:45 KST — KRX publishes
+    # the daily aggregate shortly after 16:00. Sweep covers all three
+    # market codes (STK/KSQ/ALL). Heartbeat lands in /health; KRX login
+    # required (silent no-op on empty data otherwise).
+    scheduler.add_job(
+        with_heartbeat(
+            redis_client,
+            "market_investor_flow_daily",
+            daily_market_investor_flow_tick,
+        ),
+        CronTrigger(hour=16, minute=45, timezone="Asia/Seoul"),
+        kwargs={"lookback_days": MARKET_INVESTOR_FLOW_LOOKBACK_DAYS},
+        args=[market_investor_flow_adapter],
+        id="market_investor_flow_daily",
         coalesce=True,
         max_instances=1,
         misfire_grace_time=3600,

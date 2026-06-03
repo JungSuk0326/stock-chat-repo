@@ -42,6 +42,7 @@ HEARTBEAT_EXPECTATIONS: dict[str, int] = {
     "fundamentals_refresh_daily": 25 * 3600,
     "screener_run_daily": 25 * 3600,
     "investor_flow_sync_daily": 25 * 3600,
+    "market_investor_flow_daily": 25 * 3600,
 }
 
 

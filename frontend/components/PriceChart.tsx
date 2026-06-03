@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { getPrices, type Tick, wsPriceUrl } from "@/lib/api";
 import {
+  DEFAULT_SELECTED,
   INDICATORS,
   type IndicatorId,
   loadSelected,
@@ -62,6 +63,12 @@ function removeIndicatorSeries(chart: IChartApi, ref: IndicatorSeriesRef) {
   }
 }
 
+function sameSet<T>(a: Set<T>, b: Set<T>): boolean {
+  if (a.size !== b.size) return false;
+  for (const v of a) if (!b.has(v)) return false;
+  return true;
+}
+
 interface Props {
   exchange: string;
   symbol: string;
@@ -76,11 +83,25 @@ export function PriceChart({ exchange, symbol }: Props) {
 
   // Indicator state — selection lives globally (localStorage), series refs
   // are per chart instance (lifecycle tied to the chart).
+  //
+  // Initialize with SSR-safe DEFAULT and hydrate from localStorage in an
+  // effect. useState lazy initializers that touch `window` lose to
+  // Next.js SSR — the server renders with DEFAULT, hydration freezes
+  // that state, and localStorage is never consulted. The effect below
+  // pulls the real selection on first client render, triggering the
+  // settings-sync effect to recreate the series.
   const [selected, setSelected] = useState<Set<IndicatorId>>(
-    () => new Set(loadSelected()),
+    () => new Set(DEFAULT_SELECTED),
   );
-  const selectedRef = useRef(selected);
-  selectedRef.current = selected;
+
+  useEffect(() => {
+    const stored = loadSelected();
+    // Skip the state update if the persisted value is already the same —
+    // avoids a needless second render + indicator series rebuild on the
+    // common case where the user has the default selection.
+    if (sameSet(stored, new Set(DEFAULT_SELECTED))) return;
+    setSelected(stored);
+  }, []);
 
   const indicatorSeriesRef = useRef<Map<IndicatorId, IndicatorSeriesRef>>(
     new Map(),
@@ -220,10 +241,8 @@ export function PriceChart({ exchange, symbol }: Props) {
         }
         setBarCount(data.bars.length);
         setHistoryStatus("ready");
-
-        // After data lands, populate any indicators that are currently
-        // enabled. The settings-sync effect already created their series.
-        applyAllIndicators();
+        // Indicator series are created + populated by the settings-sync
+        // effect, which re-runs on this historyStatus transition.
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -251,15 +270,31 @@ export function PriceChart({ exchange, symbol }: Props) {
   }, [exchange, symbol, applyAllIndicators]);
 
   // ----- Sync indicator series with selection -----
-  // Adds new series for newly-checked indicators, removes deleted ones.
-  // Runs after the chart is created and whenever `selected` changes.
+  // Reconciles series with `selected` in one shot. Gated on closes
+  // being populated so we never end up with a series whose pane is
+  // allocated but whose setData was never called — that intermediate
+  // state, with lightweight-charts v5 + paneIndex, sometimes leaves
+  // the pane visible but the line invisible.
+  //
+  // historyStatus is a dep so the effect re-runs when data lands and
+  // creates all series at once with setData already applied.
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
+    if (closesRef.current.length === 0) return;
 
     const current = indicatorSeriesRef.current;
 
-    // Add new
+    // Remove deselected first — frees up the pane slot if RSI is the
+    // only pane-1 occupant and the user just unchecked it.
+    for (const id of Array.from(current.keys())) {
+      if (!selected.has(id)) {
+        removeIndicatorSeries(chart, current.get(id)!);
+        current.delete(id);
+      }
+    }
+
+    // Add missing
     for (const meta of INDICATORS) {
       if (!selected.has(meta.id) || current.has(meta.id)) continue;
 
@@ -326,14 +361,6 @@ export function PriceChart({ exchange, symbol }: Props) {
         }
       }
       applyIndicator(meta.id);
-    }
-
-    // Remove deselected
-    for (const id of Array.from(current.keys())) {
-      if (!selected.has(id)) {
-        removeIndicatorSeries(chart, current.get(id)!);
-        current.delete(id);
-      }
     }
   }, [selected, applyIndicator, historyStatus]);
 

@@ -17,6 +17,7 @@ import {
   runScreener,
   snoozeCandidate,
 } from "@/lib/api";
+import { DiscoveryNaturalLanguage } from "@/components/DiscoveryNaturalLanguage";
 import {
   CRITERION_CATALOG,
   type CriterionDef,
@@ -129,7 +130,7 @@ export default function DiscoveryPage() {
           </Link>
           <h1 className="text-2xl font-bold text-gray-900">종목 발굴</h1>
           <p className="text-sm text-gray-500">
-            스크리너 정의 → 일일 17:30 KST 자동 평가 → 후보 검토
+            자연어 발굴 (AI) · 스크리너 정의 (룰 기반) — 둘 다 사용 가능
           </p>
         </header>
 
@@ -138,6 +139,12 @@ export default function DiscoveryPage() {
             {error}
           </div>
         )}
+
+        {/* AI 자연어 발굴 — 투자자 수급 기반. 즉답형, 발굴 후 바로
+            관심종목에 추가 가능. 룰 기반 screener와 독립. */}
+        <div className="mb-6">
+          <DiscoveryNaturalLanguage />
+        </div>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[420px_1fr]">
           {/* Left column: screeners */}

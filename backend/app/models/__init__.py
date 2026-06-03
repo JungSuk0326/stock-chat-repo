@@ -12,6 +12,12 @@ from app.models.discovery import Candidate, Screener
 from app.models.fundamentals import FundamentalsSnapshot
 from app.models.instrument import Instrument
 from app.models.investor_flow import InvestorFlow
+from app.models.market_investor_flow import (
+    INVESTOR_TYPE_LABELS_KO,
+    INVESTOR_TYPES,
+    MARKETS,
+    MarketInvestorFlow,
+)
 from app.models.news import NewsItem
 from app.models.price import Price
 from app.models.user import OWNER_USER_ID, User
@@ -28,7 +34,11 @@ __all__ = [
     "Disclosure",
     "FundamentalsSnapshot",
     "Instrument",
+    "INVESTOR_TYPE_LABELS_KO",
+    "INVESTOR_TYPES",
     "InvestorFlow",
+    "MARKETS",
+    "MarketInvestorFlow",
     "NewsItem",
     "OWNER_USER_ID",
     "Price",

@@ -18,7 +18,7 @@
 
 ## 현재 진행 상태
 
-마지막 갱신: 2026-06-03 (Top8 — 투자자 수급 (외국인/기관/개인) 탭 + LLM 컨텍스트 합류까지)
+마지막 갱신: 2026-06-04 (Top9 — KRX 세분류 + 자연어 발굴 (LLM tool-use))
 
 ### 기반 구조
 - [x] CLAUDE.md 초안 + 멀티마켓/발굴 섹션 + Skill routing
@@ -42,6 +42,7 @@
 - [x] `alert_events` 테이블 — rule_id FK + fired_at + triggered_value + channel + delivery_status (발화 이력/디버깅)
 - [x] `news_items` 테이블 — instrument_id FK + source/source_id + title + published_at(UTC) + url + publisher (본문 X)
 - [x] `investor_flows` 테이블 — instrument_id FK + trade_date + foreign/institutional/individual net_volume + foreign_hold_ratio (외국인/기관/개인 일일 순매수)
+- [x] `market_investor_flows` 테이블 — long-format (trade_date, market[STK/KSQ/ALL], investor_type[사모/연기금/투신/외국인/...]) + net_value (Top9)
 - [ ] `community_signals` 테이블
 - [x] `fundamentals_snapshot` 테이블 — yfinance 캐시 (Top7)
 - [x] `screeners`, `candidates` 테이블 (Top7)
@@ -66,6 +67,7 @@
 - [x] **DB 백업 워커 (R5)** — `app/workers/backup.py`, 매일 03:30 KST `pg_dump | gzip`, BACKUP_RETENTION_DAYS 자동 정리, 오프사이트는 호스트 hyper backup
 - [x] **네이버 금융 뉴스 수집 워커** — 5분 폴링, watchlist 전체, 신규 종목 50건 backfill, 본문 X (헤드라인만)
 - [x] **투자자 수급 수집 워커 (Top8)** — 일일 16:30 KST cron, Naver trend API로 외국인/기관/개인 순매수 + 외국인 보유율 적재. 신규 watchlist 종목 60일 backfill
+- [x] **시장 전체 투자자 세분류 수집 워커 (Top9)** — 일일 16:45 KST cron, pykrx로 KOSPI/KOSDAQ/ALL × 11개 투자자 유형(사모/연기금/투신/금융투자/보험/은행/기타금융/기타법인/개인/외국인/기타외국인) 순매수 적재. KRX 로그인 필요 (KRX_ID/KRX_PW)
 - [x] **yfinance fundamentals 일일 refresh** — 17:00 KST cron, watchlist 종목 PER/PBR/시총/배당수익률 (Top7)
 - [x] **스크리너 일일 실행** — 17:30 KST cron, 활성 screeners → candidates 적재 (Top7)
 - [ ] RSS 뉴스 (한경/매경/연합 — Phase 2 또는 필요 시)
@@ -88,11 +90,14 @@
 - [x] `GET /disclosures/{ex}/{sym}` — 종목별 최근 공시 (헤드라인만)
 - [x] `GET /news/{ex}/{sym}` — 종목별 최근 뉴스 (헤드라인 + publisher + URL)
 - [x] `GET /investor-flows/{ex}/{sym}` — 종목별 일별 외국인/기관/개인 순매수 + 외국인 보유율 (Top8)
+- [x] `GET /investor-flows/market?market=STK&investor_types=private_fund,pension&days=30` — 시장 전체 세분류 (Top9)
+- [x] `POST /discovery/llm` — 자연어 발굴 (LLM tool-use, stateless). 사용자 쿼리 → LLM이 `discover_by_investor_flow` 호출 → pykrx 종목별 랭킹 (Redis 6h 캐시) → answer + candidates (Top9)
 - [x] **알림 UI** (`AlertsPanel`) — 조건 드롭다운 + 임계값 + 이름, 켜기/끄기 토글, 삭제, 30초 자동 새로고침 + ChatPanel 확인 시 CustomEvent로 즉시 반영
 - [x] `GET/POST/PATCH/DELETE /alerts` + `GET /alerts/{id}/events` — owner-scoped CRUD + 발화 이력
 - [x] **차트 지표 토글** (`ChartSettings`) — SMA(5/20/60/120) / EMA(12/26) / Bollinger(20,2σ) / RSI(14, 별도 페인), localStorage 영속
 - [x] **AI 알림 등록 (`ChatPanel` ActionCard)** — 자연어로 "삼성 320k 알림" → 확인 카드 → 실제 등록. 환각 안전망
-- [ ] 발굴 후보 UI
+- [x] **자연어 종목 발굴 UI (Top9 `DiscoveryNaturalLanguage`)** — `/discovery` 페이지 상단, 예시 쿼리 칩 + 입력바 → POST `/discovery/llm` → 결과 카드 + 관심종목 추가 버튼
+- [ ] 발굴 후보 UI (룰 기반 — 기존 screener UI는 살아있음)
 
 ### LLM
 - [x] **LLM 비용 hard cap (R2)** — Redis 기반 daily/monthly 통합 카운터, provider 무관
@@ -108,8 +113,8 @@
 - [x] **뉴스 헤드라인 합류** — 최근 24시간 / 최대 15건, 헤드라인 + 언론사만 (본문 X)
 - [x] **수급 요약 합류 (Top8)** — 최근 5거래일 외국인/기관/개인 누적 순매수 + 매수일/매도일 카운트 + 외국인 보유율 (priority #4 자리)
 - [x] **fundamentals 컨텍스트는 미합류** — 별도 스크리너 평가에만 사용 (LLM 답변엔 노출 안 됨, 필요시 도구로 fetch)
-- [x] **종목 발굴 — 조건 스크리닝 (Top7 백엔드 완료)** — 평가 엔진 + 일일 17:30 cron 동작. REST/UI 미완성
-- [ ] 종목 발굴 — LLM 기반 추천 (Top5 tool-use 패턴 재사용)
+- [x] **종목 발굴 — 조건 스크리닝 (Top7)** — 평가 엔진 + 일일 17:30 cron + REST + UI 완료
+- [x] **종목 발굴 — LLM 자연어 (Top9)** — Top5 tool-use 패턴 재사용. `app/llm/discovery_tools.py` 별도 레지스트리 + `discover_by_investor_flow` 도구 (사모/연기금/외국인/투신 등 11종 × KOSPI/KOSDAQ/ALL × period_days × top_n × buy/sell), Redis 6시간 캐시, stateless 엔드포인트
 - [ ] 종토방 감성 집계 합류 (감성 분류 후)
 
 ### 운영 / 보안 / 배포
@@ -668,6 +673,7 @@ docker compose exec backend bash  # 컨테이너 진입
 
 ### 한국 (Phase 1)
 - `DART_API_KEY` — DART OpenAPI
+- `KRX_ID`, `KRX_PW` — data.krx.co.kr 무료 회원 가입 후 발급. pykrx가 `os.getenv()`로 직접 읽으므로 `get_settings()` 호출 시 `os.environ.setdefault()`로 푸시. **시장 전체 투자자 세분류 (사모/연기금/투신 등) 및 자연어 발굴 (Top9) 기능에 필수.** 비워두면 해당 워커와 LLM 도구가 빈 결과 반환, 나머지는 정상 동작.
 
 ### 미국 (Phase 2, 예정)
 - `FINNHUB_API_KEY` — Finnhub

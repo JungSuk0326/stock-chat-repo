@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from typing import Literal
 
@@ -41,6 +42,14 @@ class Settings(BaseSettings):
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
 
+    # KRX login (data.krx.co.kr free account). pykrx reads these env vars
+    # directly via `build_krx_session()` — the only thing this declaration
+    # buys us is dotenv loading + a single place to document the dependency.
+    # Required for investor-flow detail (사모/연기금/투신 etc.) endpoints
+    # which KRX gated behind login.
+    KRX_ID: str = ""
+    KRX_PW: str = ""
+
     # Alerts
     # "log" routes fires to structlog (always works, dev default).
     # "telegram" requires TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID; falls back
@@ -67,6 +76,17 @@ class Settings(BaseSettings):
         return [m.strip().upper() for m in self.ENABLED_MARKETS.split(",") if m.strip()]
 
 
+# Settings → os.environ keys that need to be visible to libraries that
+# bypass pydantic-settings entirely. pykrx (KRX_ID/KRX_PW) reads via
+# os.getenv at session-build time.
+_EXPORT_TO_OS_ENVIRON = ("KRX_ID", "KRX_PW")
+
+
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    s = Settings()
+    for key in _EXPORT_TO_OS_ENVIRON:
+        value = getattr(s, key, "")
+        if value:
+            os.environ.setdefault(key, value)
+    return s

@@ -10,9 +10,11 @@ from app.api import candidates as candidates_api
 from app.api import chat as chat_api
 from app.api import chat_sessions as chat_sessions_api
 from app.api import disclosures as disclosures_api
+from app.api import discovery_llm as discovery_llm_api
 from app.api import instruments as instruments_api
 from app.api import investor_flows as investor_flows_api
 from app.api import llm as llm_api
+from app.api import market_investor_flows as market_investor_flows_api
 from app.api import news as news_api
 from app.api import prices as prices_api
 from app.api import screeners as screeners_api
@@ -96,10 +98,15 @@ app.include_router(chat_api.router)
 app.include_router(llm_api.router)
 app.include_router(disclosures_api.router)
 app.include_router(news_api.router)
+# /investor-flows/market must come before /investor-flows/{exchange}/{symbol}
+# so FastAPI's path matcher routes "market" as the fixed segment rather than
+# treating it as an exchange code.
+app.include_router(market_investor_flows_api.router)
 app.include_router(investor_flows_api.router)
 app.include_router(alerts_api.router)
 app.include_router(screeners_api.router)
 app.include_router(candidates_api.router)
+app.include_router(discovery_llm_api.router)
 
 
 @app.get("/health")

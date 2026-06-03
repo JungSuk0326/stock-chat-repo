@@ -575,3 +575,37 @@ export function snoozeCandidate(id: number, days = 7): Promise<Candidate> {
 export function dismissCandidate(id: number): Promise<Candidate> {
   return http<Candidate>(`/candidates/${id}/dismiss`, { method: "POST" });
 }
+
+// ---------- Natural-language discovery (LLM tool-use) ----------
+
+export interface DiscoveryCandidateOut {
+  exchange: string;
+  symbol: string;
+  name: string;
+  metric_label: string;
+  metric_value: number; // signed KRW
+}
+
+export interface DiscoveryLlmResponse {
+  answer: string;
+  candidates: DiscoveryCandidateOut[];
+  tools_called: Array<{
+    name: string;
+    arguments: Record<string, unknown>;
+    candidate_count: number;
+  }>;
+  input_tokens: number;
+  output_tokens: number;
+  model: string;
+}
+
+export function discoveryLlmQuery(args: {
+  query: string;
+  provider?: string;
+  model?: string;
+}): Promise<DiscoveryLlmResponse> {
+  return http<DiscoveryLlmResponse>("/discovery/llm", {
+    method: "POST",
+    body: JSON.stringify(args),
+  });
+}
