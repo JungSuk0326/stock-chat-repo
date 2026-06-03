@@ -426,3 +426,36 @@ export function getNews(args: {
     `/news/${args.exchange}/${args.symbol}${q ? `?${q}` : ""}`,
   );
 }
+
+// ---------- Investor flows (외국인/기관/개인 수급) ----------
+
+export interface InvestorFlowItem {
+  id: number;
+  trade_date: string; // YYYY-MM-DD
+  foreign_net_volume: number; // signed shares
+  foreign_hold_ratio: string | null; // percent as string ("48.11")
+  institutional_net_volume: number;
+  individual_net_volume: number;
+  close_price: number | null;
+  source: string;
+  created_at: string;
+}
+
+export interface InvestorFlowListResponse {
+  instrument: string;
+  count: number;
+  items: InvestorFlowItem[];
+}
+
+export function getInvestorFlows(args: {
+  exchange: string;
+  symbol: string;
+  limit?: number;
+}): Promise<InvestorFlowListResponse> {
+  const qs = new URLSearchParams();
+  if (args.limit !== undefined) qs.set("limit", String(args.limit));
+  const q = qs.toString();
+  return http<InvestorFlowListResponse>(
+    `/investor-flows/${args.exchange}/${args.symbol}${q ? `?${q}` : ""}`,
+  );
+}

@@ -4,8 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   type DisclosureItem,
+  type InvestorFlowItem,
   type NewsItem,
   getDisclosures,
+  getInvestorFlows,
   getNews,
 } from "@/lib/api";
 
@@ -14,7 +16,7 @@ interface Props {
   symbol: string;
 }
 
-type TabId = "disclosures" | "news";
+type TabId = "disclosures" | "news" | "flows";
 
 const DEFAULT_LIMIT = 50;
 const REFRESH_INTERVAL_MS = 60_000;
@@ -50,7 +52,19 @@ function formatKstTime(iso: string): string {
 function loadInitialTab(): TabId {
   if (typeof window === "undefined") return "disclosures";
   const saved = window.localStorage.getItem(TAB_STORAGE_KEY);
-  return saved === "news" ? "news" : "disclosures";
+  if (saved === "news" || saved === "flows") return saved;
+  return "disclosures";
+}
+
+const FLOW_LIMIT = 30;
+
+function formatSignedVolume(n: number): string {
+  if (n === 0) return "0";
+  const sign = n > 0 ? "+" : "−";
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000) return `${sign}${(abs / 1_000_000).toFixed(2)}M`;
+  if (abs >= 1_000) return `${sign}${(abs / 1_000).toFixed(0)}K`;
+  return `${sign}${abs.toLocaleString("ko-KR")}`;
 }
 
 /**
@@ -66,6 +80,7 @@ export function MarketFeedPanel({ exchange, symbol }: Props) {
 
   const [disclosures, setDisclosures] = useState<DisclosureItem[] | null>(null);
   const [news, setNews] = useState<NewsItem[] | null>(null);
+  const [flows, setFlows] = useState<InvestorFlowItem[] | null>(null);
   const [error, setError] = useState<string>("");
 
   const refreshDisclosures = useCallback(async () => {
@@ -90,16 +105,29 @@ export function MarketFeedPanel({ exchange, symbol }: Props) {
     }
   }, [exchange, symbol]);
 
-  // Refresh both lists periodically. Both are owner-cheap GETs.
+  const refreshFlows = useCallback(async () => {
+    try {
+      const res = await getInvestorFlows({ exchange, symbol, limit: FLOW_LIMIT });
+      setFlows(res.items);
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setFlows([]);
+    }
+  }, [exchange, symbol]);
+
+  // Refresh all three periodically. Cheap GETs, keeps tab-switches instant.
   useEffect(() => {
     void refreshDisclosures();
     void refreshNews();
+    void refreshFlows();
     const id = window.setInterval(() => {
       void refreshDisclosures();
       void refreshNews();
+      void refreshFlows();
     }, REFRESH_INTERVAL_MS);
     return () => window.clearInterval(id);
-  }, [refreshDisclosures, refreshNews]);
+  }, [refreshDisclosures, refreshNews, refreshFlows]);
 
   const handleTabChange = useCallback((next: TabId) => {
     setTab(next);
@@ -110,8 +138,9 @@ export function MarketFeedPanel({ exchange, symbol }: Props) {
 
   const refreshActive = useCallback(() => {
     if (tab === "disclosures") void refreshDisclosures();
-    else void refreshNews();
-  }, [tab, refreshDisclosures, refreshNews]);
+    else if (tab === "news") void refreshNews();
+    else void refreshFlows();
+  }, [tab, refreshDisclosures, refreshNews, refreshFlows]);
 
   const disclosureGroups = useMemo(
     () => groupByDate(disclosures, (d) => d.filed_at),
@@ -122,7 +151,8 @@ export function MarketFeedPanel({ exchange, symbol }: Props) {
     [news],
   );
 
-  const items = tab === "disclosures" ? disclosures : news;
+  const items =
+    tab === "disclosures" ? disclosures : tab === "news" ? news : flows;
 
   return (
     <div className="flex h-[640px] flex-col rounded-lg bg-white shadow">
@@ -141,6 +171,13 @@ export function MarketFeedPanel({ exchange, symbol }: Props) {
           label="뉴스"
           subLabel="네이버"
           count={news?.length ?? null}
+        />
+        <TabButton
+          active={tab === "flows"}
+          onClick={() => handleTabChange("flows")}
+          label="수급"
+          subLabel="외국인·기관"
+          count={flows?.length ?? null}
         />
         <button
           type="button"
@@ -163,14 +200,19 @@ export function MarketFeedPanel({ exchange, symbol }: Props) {
           <p className="mt-8 text-center text-sm text-gray-400">
             {tab === "disclosures"
               ? "아직 적재된 공시가 없습니다."
-              : "아직 적재된 뉴스가 없습니다."}
+              : tab === "news"
+                ? "아직 적재된 뉴스가 없습니다."
+                : "아직 적재된 수급 데이터가 없습니다."}
             <br />
-            워커가 {tab === "disclosures" ? "1분" : "5분"} 주기로 새로 가져옵니다.
+            워커가 {tab === "disclosures" ? "1분" : tab === "news" ? "5분" : "매일 16:30 KST"}
+            {tab === "flows" ? " 에 새로 가져옵니다." : " 주기로 새로 가져옵니다."}
           </p>
         ) : tab === "disclosures" ? (
           <DisclosureList groups={disclosureGroups ?? []} />
-        ) : (
+        ) : tab === "news" ? (
           <NewsList groups={newsGroups ?? []} />
+        ) : (
+          <FlowList items={flows ?? []} />
         )}
       </div>
     </div>
@@ -264,6 +306,57 @@ function DisclosureList({ groups }: { groups: [string, DisclosureItem[]][] }) {
       ))}
     </ul>
   );
+}
+
+/**
+ * 일별 외국인/기관/개인 순매수 + 외국인 보유율 + 종가. 빨강=매수, 파랑=매도
+ * (한국 차트 관례). 거래일 한 줄당 한 행 — 모든 정보 한눈에.
+ */
+function FlowList({ items }: { items: InvestorFlowItem[] }) {
+  return (
+    <table className="w-full text-xs">
+      <thead className="text-gray-500">
+        <tr className="border-b border-gray-200">
+          <th className="py-1.5 text-left font-medium">날짜</th>
+          <th className="py-1.5 text-right font-medium">외국인</th>
+          <th className="py-1.5 text-right font-medium">기관</th>
+          <th className="py-1.5 text-right font-medium">개인</th>
+          <th className="py-1.5 text-right font-medium">보유율</th>
+          <th className="py-1.5 text-right font-medium">종가</th>
+        </tr>
+      </thead>
+      <tbody>
+        {items.map((it) => (
+          <tr key={it.id} className="border-b border-gray-100">
+            <td className="py-1.5 font-mono text-gray-700">
+              {it.trade_date.slice(5)}
+            </td>
+            <td className={`py-1.5 text-right font-mono ${flowColor(it.foreign_net_volume)}`}>
+              {formatSignedVolume(it.foreign_net_volume)}
+            </td>
+            <td className={`py-1.5 text-right font-mono ${flowColor(it.institutional_net_volume)}`}>
+              {formatSignedVolume(it.institutional_net_volume)}
+            </td>
+            <td className={`py-1.5 text-right font-mono ${flowColor(it.individual_net_volume)}`}>
+              {formatSignedVolume(it.individual_net_volume)}
+            </td>
+            <td className="py-1.5 text-right font-mono text-gray-600">
+              {it.foreign_hold_ratio ? `${it.foreign_hold_ratio}%` : "—"}
+            </td>
+            <td className="py-1.5 text-right font-mono text-gray-700">
+              {it.close_price ? it.close_price.toLocaleString("ko-KR") : "—"}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function flowColor(n: number): string {
+  if (n > 0) return "text-red-600";   // 한국 관례: 매수=빨강
+  if (n < 0) return "text-blue-600";  // 매도=파랑
+  return "text-gray-400";
 }
 
 function NewsList({ groups }: { groups: [string, NewsItem[]][] }) {
