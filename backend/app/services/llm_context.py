@@ -4,7 +4,7 @@ CLAUDE.md priority (high → low):
   1. 현재가, 등락률, 거래량
   2. 당일/최근 공시 헤드라인
   3. 최근 24h 뉴스 헤드라인
-  4. 커뮤니티 감성 집계               ← 미구현
+  4. 외국인/기관/개인 수급 요약 (커뮤니티 감성보다 KR 시장에선 더 강한 시그널)
   5. 기술적 지표 (이동평균, RSI 등)
   6. 과거 차트 요약 (1주/1개월 추세)
 
@@ -26,7 +26,7 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Disclosure, Instrument, NewsItem, Price
+from app.models import Disclosure, Instrument, InvestorFlow, NewsItem, Price
 
 # Disclosure window for the LLM context. Last N days, capped to MAX entries.
 # Samsung-class large caps file ~10/day (mostly operator share transactions);
@@ -38,6 +38,12 @@ DISCLOSURE_MAX_COUNT = 20
 # anything older is rarely the proximate cause of today's behavior.
 NEWS_WINDOW_HOURS = 24
 NEWS_MAX_COUNT = 15
+
+# Investor flow window. 5 trading days captures the recent supply/demand
+# story without dragging stale weeks into the prompt. We summarize as a
+# small bullet list (cumulative + per-day count) — sending raw daily
+# rows would burn ~10x more tokens for marginal LLM benefit.
+INVESTOR_FLOW_WINDOW_DAYS = 5
 
 log = structlog.get_logger()
 
@@ -60,6 +66,25 @@ class NewsHeadline:
     published_at: datetime  # UTC
     title: str
     publisher: str | None
+
+
+@dataclass
+class InvestorFlowSummary:
+    """Aggregated foreign/institutional/individual net buy over a window.
+    Both cumulative (sum) and direction count (how many days net-buy vs
+    net-sell) — the count is what reveals "외국인이 5일 연속 매도" stories."""
+
+    days: int
+    foreign_net_total: int
+    foreign_buy_days: int
+    foreign_sell_days: int
+    institutional_net_total: int
+    institutional_buy_days: int
+    institutional_sell_days: int
+    individual_net_total: int
+    individual_buy_days: int
+    individual_sell_days: int
+    foreign_hold_ratio_latest: Decimal | None
 
 
 @dataclass
@@ -92,6 +117,7 @@ class LLMContext:
 
     recent_disclosures: list[DisclosureSummary] = field(default_factory=list)
     recent_news: list[NewsHeadline] = field(default_factory=list)
+    investor_flow: InvestorFlowSummary | None = None
 
     def as_text(self) -> str:
         ccy = self.currency
@@ -159,6 +185,30 @@ class LLMContext:
             lines.append("- (해당 기간 뉴스 없음)")
         lines.append("")
 
+        # 4. 최근 수급 (외국인/기관/개인 5거래일 누적 + 매수/매도 일수)
+        lines.append(f"### 최근 수급 (최근 {INVESTOR_FLOW_WINDOW_DAYS}거래일)")
+        flow = self.investor_flow
+        if flow is None or flow.days == 0:
+            lines.append("- (해당 기간 수급 데이터 없음)")
+        else:
+            lines.append(
+                f"- 외국인: 순매수 {_fmt_volume(flow.foreign_net_total)}주 "
+                f"(매수 {flow.foreign_buy_days}일 / 매도 {flow.foreign_sell_days}일)"
+            )
+            lines.append(
+                f"- 기관: 순매수 {_fmt_volume(flow.institutional_net_total)}주 "
+                f"(매수 {flow.institutional_buy_days}일 / 매도 {flow.institutional_sell_days}일)"
+            )
+            lines.append(
+                f"- 개인: 순매수 {_fmt_volume(flow.individual_net_total)}주 "
+                f"(매수 {flow.individual_buy_days}일 / 매도 {flow.individual_sell_days}일)"
+            )
+            if flow.foreign_hold_ratio_latest is not None:
+                lines.append(
+                    f"- 외국인 보유율(최신): {flow.foreign_hold_ratio_latest}%"
+                )
+        lines.append("")
+
         # 5. 기술적 지표
         lines.append("### 기술적 지표")
         if self.ma5 is not None:
@@ -180,6 +230,20 @@ def _fmt_money(amount: Decimal | None, currency: str) -> str:
     if currency == "KRW":
         return f"{int(amount):,}원"
     return f"{amount:.2f} {currency}"
+
+
+def _fmt_volume(n: int) -> str:
+    """Compact signed share counts: ±M for 백만 단위, ±k for 천 단위, else raw.
+    Adds a leading + for positives so the LLM sees direction at a glance."""
+    if n == 0:
+        return "0"
+    sign = "+" if n > 0 else "-"
+    abs_n = abs(n)
+    if abs_n >= 1_000_000:
+        return f"{sign}{abs_n / 1_000_000:.2f}M"
+    if abs_n >= 1_000:
+        return f"{sign}{abs_n / 1_000:.0f}K"
+    return f"{sign}{abs_n}"
 
 
 def _sma(values: list[Decimal], window: int) -> Decimal | None:
@@ -341,6 +405,47 @@ async def assemble_context(
         for n in news_rows
     ]
 
+    # Investor flow summary (priority 4) — aggregate last N trading days.
+    flow_rows = (
+        (
+            await db.execute(
+                select(InvestorFlow)
+                .where(InvestorFlow.instrument_id == instrument.id)
+                .order_by(InvestorFlow.trade_date.desc())
+                .limit(INVESTOR_FLOW_WINDOW_DAYS)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    investor_flow: InvestorFlowSummary | None = None
+    if flow_rows:
+        f_total = sum(r.foreign_net_volume for r in flow_rows)
+        i_total = sum(r.institutional_net_volume for r in flow_rows)
+        p_total = sum(r.individual_net_volume for r in flow_rows)
+        investor_flow = InvestorFlowSummary(
+            days=len(flow_rows),
+            foreign_net_total=int(f_total),
+            foreign_buy_days=sum(1 for r in flow_rows if r.foreign_net_volume > 0),
+            foreign_sell_days=sum(1 for r in flow_rows if r.foreign_net_volume < 0),
+            institutional_net_total=int(i_total),
+            institutional_buy_days=sum(
+                1 for r in flow_rows if r.institutional_net_volume > 0
+            ),
+            institutional_sell_days=sum(
+                1 for r in flow_rows if r.institutional_net_volume < 0
+            ),
+            individual_net_total=int(p_total),
+            individual_buy_days=sum(
+                1 for r in flow_rows if r.individual_net_volume > 0
+            ),
+            individual_sell_days=sum(
+                1 for r in flow_rows if r.individual_net_volume < 0
+            ),
+            # flow_rows[0] is newest because of ORDER BY trade_date DESC
+            foreign_hold_ratio_latest=flow_rows[0].foreign_hold_ratio,
+        )
+
     return LLMContext(
         canonical_id=f"{instrument.exchange}:{instrument.symbol}",
         name=instrument.name,
@@ -362,6 +467,7 @@ async def assemble_context(
         recent_bars_count=len(bars),
         recent_disclosures=recent_disclosures,
         recent_news=recent_news,
+        investor_flow=investor_flow,
     )
 
 

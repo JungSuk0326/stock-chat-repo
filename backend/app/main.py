@@ -10,6 +10,7 @@ from app.api import chat as chat_api
 from app.api import chat_sessions as chat_sessions_api
 from app.api import disclosures as disclosures_api
 from app.api import instruments as instruments_api
+from app.api import investor_flows as investor_flows_api
 from app.api import llm as llm_api
 from app.api import news as news_api
 from app.api import prices as prices_api
@@ -21,7 +22,9 @@ from app.core.logging import configure_logging
 from app.core.redis_client import ping_redis, redis_client
 from app.llm.budget import LLMBudget
 from app.llm.registry import LLMRegistry
+from app.services.disclosure.kr import DartAdapter
 from app.services.market.kr import KrMarketAdapter
+from app.services.news.kr import NaverNewsAdapter
 from app.workers.heartbeat import classify, read_all as read_heartbeats
 
 settings = get_settings()
@@ -37,10 +40,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         log_level=settings.LOG_LEVEL,
         enabled_markets=settings.enabled_markets,
     )
-    # Shared external-API client. Used by POST /watchlist for immediate backfill
-    # so the user lands on a populated chart instead of waiting for the worker's
-    # 30s reconcile cycle.
+    # Shared external-API clients. Used by POST /watchlist for immediate
+    # backfill so the user lands on populated panels (chart + 공시 + 뉴스)
+    # instead of waiting for the worker's 30s reconcile cycle.
     app.state.kr_adapter = KrMarketAdapter()
+    app.state.dart_adapter = DartAdapter(api_key=settings.DART_API_KEY)
+    app.state.news_adapter = NaverNewsAdapter()
 
     # Shared LLM registry. Budget enforces combined daily + monthly token caps
     # across all providers (R2). Registry boots clients only for providers
@@ -55,6 +60,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log.info("app.shutdown")
     await app.state.llm_registry.aclose()
     await app.state.kr_adapter.aclose()
+    await app.state.dart_adapter.aclose()
+    await app.state.news_adapter.aclose()
     await engine.dispose()
     await redis_client.aclose()
 
@@ -87,6 +94,7 @@ app.include_router(chat_api.router)
 app.include_router(llm_api.router)
 app.include_router(disclosures_api.router)
 app.include_router(news_api.router)
+app.include_router(investor_flows_api.router)
 app.include_router(alerts_api.router)
 
 
