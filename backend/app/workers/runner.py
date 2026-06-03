@@ -47,6 +47,11 @@ from app.services.discovery import run_all_enabled_screeners
 from app.services.fundamentals.kr import YFinanceKrAdapter
 from app.services.fundamentals_sync import refresh_watchlist as refresh_fundamentals_watchlist
 from app.services.instruments import sync_kr_instruments
+from app.services.investor_flow.kr import NaverTrendAdapter
+from app.services.investor_flow_sync import (
+    sync_investor_flow_for_symbol,
+    sync_investor_flow_watchlist,
+)
 from app.services.market.kr import KrMarketAdapter
 from app.services.news.kr import NaverNewsAdapter
 from app.services.news_sync import sync_news_for_symbol, sync_news_watchlist
@@ -75,6 +80,11 @@ ALERT_INTERVAL_SECONDS = 60
 NEWS_POLL_INTERVAL_SECONDS = 300      # 5 minutes
 NEWS_POLL_LIMIT_PER_SYMBOL = 30       # per tick, per symbol
 NEWS_BACKFILL_LIMIT = 50              # one-shot on new watchlist join
+
+# Investor flows (외국인/기관/개인 수급)
+INVESTOR_FLOW_DAILY_DAYS = 30        # daily sync window — overlaps multiple days
+                                      # to absorb worker downtime
+INVESTOR_FLOW_BACKFILL_DAYS = 60      # one-shot on new watchlist join
 
 
 def _poller_job_id(exchange: str, symbol: str) -> str:
@@ -207,6 +217,52 @@ async def backfill_news(
         )
 
 
+async def backfill_investor_flow(
+    adapter: NaverTrendAdapter, exchange: str, symbol: str
+) -> None:
+    """One-shot 60-day investor flow backfill on new watchlist join.
+    Fire-and-forget alongside the price + disclosure + news backfills."""
+    log.info(
+        "worker.investor_flow_backfill_started",
+        exchange=exchange,
+        symbol=symbol,
+        days=INVESTOR_FLOW_BACKFILL_DAYS,
+    )
+    try:
+        count = await sync_investor_flow_for_symbol(
+            adapter,
+            exchange=exchange,
+            symbol=symbol,
+            days=INVESTOR_FLOW_BACKFILL_DAYS,
+        )
+        log.info(
+            "worker.investor_flow_backfill_done",
+            exchange=exchange,
+            symbol=symbol,
+            new=count,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "worker.investor_flow_backfill_failed",
+            exchange=exchange,
+            symbol=symbol,
+            error=str(exc),
+        )
+
+
+async def investor_flow_daily_tick(adapter: NaverTrendAdapter) -> None:
+    """Daily sweep across the KR watchlist. 30-day window absorbs short
+    worker downtime — UNIQUE(instrument_id, trade_date) does the dedup."""
+    try:
+        new = await sync_investor_flow_watchlist(
+            adapter, days=INVESTOR_FLOW_DAILY_DAYS
+        )
+        if new:
+            log.info("worker.investor_flow_daily.new", new=new)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("worker.investor_flow_daily.failed", error=str(exc))
+
+
 async def news_poll_tick(adapter: NaverNewsAdapter) -> None:
     """Every-N-minutes sweep across the watchlist. UNIQUE(source, source_id)
     handles dedup at the DB layer so we don't need a high-water-mark."""
@@ -278,6 +334,10 @@ async def main() -> None:
     # Fundamentals adapter — yfinance backend. No API key, but rate-limited
     # implicitly by Yahoo; refresh_fundamentals_watchlist caps concurrency.
     fundamentals_adapter = YFinanceKrAdapter()
+
+    # Investor flow adapter — Naver mobile trend endpoint. Same unofficial-API
+    # caveat as prices/news; one HTTP call per symbol covers ~60 trading days.
+    investor_flow_adapter = NaverTrendAdapter()
 
     # Active pollers, keyed by canonical id "EX:SYM".
     pollers: dict[str, PricePoller] = {}
@@ -351,6 +411,11 @@ async def main() -> None:
             asyncio.create_task(
                 backfill_news(news_adapter, exchange, symbol),
                 name=f"backfill_news_{exchange}_{symbol}",
+            )
+            # Investor flow — 60d window seeds a chart-friendly history.
+            asyncio.create_task(
+                backfill_investor_flow(investor_flow_adapter, exchange, symbol),
+                name=f"backfill_investor_flow_{exchange}_{symbol}",
             )
 
     # Run reconcile once immediately so the initial state is correct without
@@ -495,6 +560,23 @@ async def main() -> None:
         misfire_grace_time=3600,
     )
 
+    # Daily investor flow sweep at 16:30 KST — Naver publishes the day's
+    # 외국인/기관/개인 수급 right after the 15:30 KRX close. 30-day window
+    # overlaps multiple sessions so a half-day downtime still catches up.
+    scheduler.add_job(
+        with_heartbeat(
+            redis_client,
+            "investor_flow_sync_daily",
+            investor_flow_daily_tick,
+        ),
+        CronTrigger(hour=16, minute=30, timezone="Asia/Seoul"),
+        args=[investor_flow_adapter],
+        id="investor_flow_sync_daily",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
     scheduler.start()
 
     # Wait for SIGINT/SIGTERM so docker compose stop is graceful.
@@ -511,6 +593,7 @@ async def main() -> None:
     await dart_adapter.aclose()
     await news_adapter.aclose()
     await fundamentals_adapter.aclose()
+    await investor_flow_adapter.aclose()
     await alert_channel.aclose()
     await redis_client.aclose()
 
