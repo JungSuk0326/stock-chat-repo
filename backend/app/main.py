@@ -6,6 +6,7 @@ from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import alerts as alerts_api
+from app.api import candidates as candidates_api
 from app.api import chat as chat_api
 from app.api import chat_sessions as chat_sessions_api
 from app.api import disclosures as disclosures_api
@@ -14,6 +15,7 @@ from app.api import investor_flows as investor_flows_api
 from app.api import llm as llm_api
 from app.api import news as news_api
 from app.api import prices as prices_api
+from app.api import screeners as screeners_api
 from app.api import watchlist as watchlist_api
 from app.api import ws_prices as ws_prices_api
 from app.core.config import get_settings
@@ -96,6 +98,8 @@ app.include_router(disclosures_api.router)
 app.include_router(news_api.router)
 app.include_router(investor_flows_api.router)
 app.include_router(alerts_api.router)
+app.include_router(screeners_api.router)
+app.include_router(candidates_api.router)
 
 
 @app.get("/health")
