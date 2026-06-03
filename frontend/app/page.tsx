@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useMemo } from "react";
 
@@ -53,13 +54,19 @@ function PageBody() {
         </div>
 
         <main className="min-w-0 flex-1">
-          <header className="mb-4">
+          <header className="mb-4 flex items-baseline gap-4">
             <h1 className="text-2xl font-bold text-gray-900">
               {selected.exchange}:{selected.symbol}
             </h1>
-            <p className="mt-1 text-sm text-gray-600">
+            <p className="text-sm text-gray-600">
               {selected.exchange === "KR" ? "한국 주식" : "주식"} · 1년 일봉 + 실시간 연동
             </p>
+            <Link
+              href="/discovery"
+              className="ml-auto rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+            >
+              종목 발굴 →
+            </Link>
           </header>
 
           <PriceChart

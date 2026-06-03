@@ -459,3 +459,119 @@ export function getInvestorFlows(args: {
     `/investor-flows/${args.exchange}/${args.symbol}${q ? `?${q}` : ""}`,
   );
 }
+
+// ---------- Discovery (screeners + candidates) ----------
+
+export interface ScreenerCriterion {
+  type: string;
+  value: unknown;
+}
+
+export interface Screener {
+  id: number;
+  name: string;
+  description: string | null;
+  universe: { market?: string };
+  criteria: ScreenerCriterion[];
+  enabled: boolean;
+  last_run_at: string | null;
+  created_at: string;
+  updated_at: string;
+  candidate_count: number | null;
+}
+
+export interface ScreenerListResponse {
+  count: number;
+  items: Screener[];
+}
+
+export interface ScreenerRunResponse {
+  screener_id: number;
+  new_candidates: number;
+}
+
+export interface ScreenerCreateRequest {
+  name: string;
+  description?: string | null;
+  universe?: { market?: string };
+  criteria?: ScreenerCriterion[];
+  enabled?: boolean;
+}
+
+export interface ScreenerUpdateRequest {
+  name?: string;
+  description?: string | null;
+  universe?: { market?: string };
+  criteria?: ScreenerCriterion[];
+  enabled?: boolean;
+}
+
+export interface Candidate {
+  id: number;
+  instrument: string; // "EX:SYM"
+  instrument_name: string | null;
+  source: string;
+  score: string | null;
+  reason: string | null;
+  status: "new" | "snoozed" | "promoted" | "dismissed";
+  discovered_at: string;
+  snoozed_until: string | null;
+  updated_at: string;
+}
+
+export interface CandidateListResponse {
+  count: number;
+  items: Candidate[];
+}
+
+export function listScreeners(): Promise<ScreenerListResponse> {
+  return http<ScreenerListResponse>("/screeners");
+}
+export function createScreener(body: ScreenerCreateRequest): Promise<Screener> {
+  return http<Screener>("/screeners", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+export function patchScreener(
+  id: number,
+  body: ScreenerUpdateRequest,
+): Promise<Screener> {
+  return http<Screener>(`/screeners/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+export function deleteScreener(id: number): Promise<void> {
+  return http<void>(`/screeners/${id}`, { method: "DELETE" });
+}
+export function runScreener(id: number): Promise<ScreenerRunResponse> {
+  return http<ScreenerRunResponse>(`/screeners/${id}/run`, {
+    method: "POST",
+  });
+}
+
+export function listCandidates(args: {
+  status?: string;
+  source?: string;
+  limit?: number;
+}): Promise<CandidateListResponse> {
+  const qs = new URLSearchParams();
+  if (args.status) qs.set("status", args.status);
+  if (args.source) qs.set("source", args.source);
+  if (args.limit !== undefined) qs.set("limit", String(args.limit));
+  const q = qs.toString();
+  return http<CandidateListResponse>(`/candidates${q ? `?${q}` : ""}`);
+}
+export function promoteCandidate(id: number): Promise<Candidate> {
+  return http<Candidate>(`/candidates/${id}/promote`, { method: "POST" });
+}
+export function snoozeCandidate(id: number, days = 7): Promise<Candidate> {
+  return http<Candidate>(`/candidates/${id}/snooze`, {
+    method: "POST",
+    body: JSON.stringify({ days }),
+  });
+}
+export function dismissCandidate(id: number): Promise<Candidate> {
+  return http<Candidate>(`/candidates/${id}/dismiss`, { method: "POST" });
+}
