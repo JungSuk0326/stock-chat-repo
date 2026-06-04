@@ -54,6 +54,7 @@ from app.services.investor_flow_sync import (
 )
 from app.services.market.kr import KrMarketAdapter
 from app.services.market.krx_openapi import KrxOpenApiClient
+from app.services.market.naver_polling import NaverPollingAdapter
 from app.services.market_investor_flow.kr import KrMarketInvestorFlowAdapter
 from app.services.market_investor_flow_sync import daily_market_investor_flow_tick
 from app.services.prices_openapi import sync_eod_watchlist_via_openapi
@@ -66,7 +67,12 @@ _KST = ZoneInfo("Asia/Seoul")
 
 log = structlog.get_logger()
 
-POLL_INTERVAL_SECONDS = 2
+# 5s interval for KRX+NXT realtime polling. Polling window is now 08:00-20:00
+# KST (NXT span). At 5s × 12h × N watchlist symbols this is ~8.6k req/sym/day
+# against Naver's polling.finance endpoint — well below the 70s Naver "polling
+# interval" hint we observed, but still much more conservative than the old
+# 2s for the mobile API. If throttling shows up, raise to 10s.
+POLL_INTERVAL_SECONDS = 5
 WATCHLIST_SYNC_INTERVAL_SECONDS = 30
 BACKFILL_DAYS = 365
 EOD_SYNC_LOOKBACK_DAYS = 7
@@ -317,6 +323,11 @@ async def main() -> None:
     # TODO Phase 2 (multi-market): one adapter per exchange (kr/us/...).
     kr_adapter = KrMarketAdapter()
 
+    # Realtime adapter for the pollers. Returns KRX+NXT in one call so
+    # the poller can fan out both venues per tick (Top10). Distinct
+    # from `kr_adapter` which owns instrument-master + EOD prices.
+    naver_polling_adapter = NaverPollingAdapter()
+
     # DART disclosure adapter. Silent no-op when DART_API_KEY isn't set, so
     # the worker still boots cleanly on a fresh install.
     dart_adapter = DartAdapter(api_key=settings.DART_API_KEY)
@@ -416,7 +427,7 @@ async def main() -> None:
             poller = PricePoller(
                 exchange=exchange,
                 symbol=symbol,
-                adapter=kr_adapter,
+                adapter=naver_polling_adapter,
                 redis=redis_client,
             )
             pollers[key] = poller
@@ -665,6 +676,7 @@ async def main() -> None:
 
     scheduler.shutdown(wait=False)
     await kr_adapter.aclose()
+    await naver_polling_adapter.aclose()
     await dart_adapter.aclose()
     await news_adapter.aclose()
     await fundamentals_adapter.aclose()

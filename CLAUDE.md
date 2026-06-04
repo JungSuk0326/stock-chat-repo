@@ -18,7 +18,7 @@
 
 ## 현재 진행 상태
 
-마지막 갱신: 2026-06-04 (Top9 — KRX 세분류 + 자연어 발굴 (LLM tool-use))
+마지막 갱신: 2026-06-05 (Top10 — NXT(넥스트레이드) 통합 — 멀티-venue 시세)
 
 ### 기반 구조
 - [x] CLAUDE.md 초안 + 멀티마켓/발굴 섹션 + Skill routing
@@ -31,7 +31,7 @@
 
 ### DB 스키마 (멀티마켓 전제)
 - [x] `instruments` 테이블 — exchange/symbol/country/currency/market/isin/name
-- [x] `prices` hypertable — TimescaleDB 7d chunk + 30d 이후 자동 압축
+- [x] `prices` hypertable — TimescaleDB 7d chunk + 30d 이후 자동 압축 + `venue` 컬럼 (KRX/NXT, Top10)
 - [x] `watchlist` 테이블 — 사용자 관심종목 (단일 사용자, UNIQUE instrument_id)
 - [x] `corp_codes` 테이블 — 규제기관 corp-id ↔ (exchange, symbol) 매핑 (DART corp_code, 추후 SEC CIK)
 - [x] `disclosures` 테이블 — instrument_id FK + source/source_id + filed_at(UTC) + title/submitter/raw_url
@@ -51,9 +51,9 @@
 - [x] `KrMarketAdapter.fetch_instruments()` — FDR로 KOSPI/KOSDAQ 2,649개 적재
 - [x] `KrMarketAdapter.fetch_eod_prices()` — pykrx로 일봉 OHLCV
 - [x] `app/scripts/sync_instruments.py`, `sync_prices.py` 수동 실행 스크립트
-- [x] 실시간 시세 워커 — 2초 폴링, Redis 캐시/Pub-Sub, 1분봉 적재
+- [x] 실시간 시세 워커 — **5초 폴링** (Top10), Redis 캐시/Pub-Sub, 1분봉 적재. **KRX + NXT 동시** (polling.finance.naver.com), 08:00-20:00 KST 폴링 윈도우, venue별 별도 1m 버퍼/캐시
 - [x] WebSocket `/ws/prices/{exchange}/{symbol}` (4404 close code, 자동 cleanup)
-- [x] 프론트엔드 라이브 차트 — WS 자동 재연결(지수 백오프) + 오늘 봉 실시간 업데이트 + LIVE/재연결 중 뱃지
+- [x] 프론트엔드 라이브 차트 — WS 자동 재연결(지수 백오프) + 오늘 봉 실시간 업데이트 + LIVE/재연결 중 뱃지 + **KRX/NXT/통합 탭** (Top10, venue별 차트 분리 + 통합모드는 NXT close를 점선 오버레이로 합성)
 - [x] **다종목 watchlist** — DB watchlist 테이블 + CRUD API + 동적 워커 (30s sync, add/remove auto)
 - [x] **종목 검색 + URL 라우팅** — `?symbol=KR:000660`, 사이드바 + SearchModal
 - [x] **신규 watchlist 종목 자동 EOD backfill** — reconcile 시점에 1년치 일봉 fire-and-forget
@@ -173,7 +173,7 @@ Multi-provider 구조. `LLMClient` ABC 뒤에 각 provider 구현을 두고, `LL
 #### Phase 1 — 한국 (KR)
 - **시세 (일봉, 일일 sync)**: KRX OpenAPI (정식, 키 설정 시) / pykrx (fallback, 백필도 담당)
 - **시세 (일봉, 1년치 백필)**: pykrx (OpenAPI는 per-date 페이지네이션이라 단일 종목 백필엔 비효율)
-- **시세 (실시간)**: 네이버 금융 모바일 API (비공식)
+- **시세 (실시간, KRX+NXT)**: `polling.finance.naver.com/api/realtime` (비공식, 한 호출에 KRX + `nxtOverMarketPriceInfo` NXT leg 둘 다 반환). 이전 `m.stock.naver.com/.../price` 경로는 KRX 전용이라 Top10에서 교체됨
 - **공시**: DART OpenAPI
 - **뉴스**: 네이버 금융 뉴스, RSS (한경, 매경, 연합인포맥스)
 - **커뮤니티**: 네이버 종토방
@@ -407,60 +407,52 @@ finally:
 - **Finnhub/TwelveData**: 무료 티어 rate limit (분/일) 엄격. 캐싱 필수.
 - **Reddit (PRAW)**: 인증 필요. 토큰 발급. 글 본문 정책은 종토방과 동일하게 적용 (집계 지표만 LLM에 노출).
 
-### 실시간 시세 흐름 (KR)
+### 실시간 시세 흐름 (KR, KRX + NXT)
 
-목표: 장중 시세를 ~2초 단위로 모니터링하고, 차트가 페이지 새로고침 없이 움직인다. 단타 분석/스윙 의사결정 보조용.
+목표: 장중 시세를 ~5초 단위로 모니터링하고, 차트가 페이지 새로고침 없이 움직인다. 단타 분석/스윙 의사결정 보조용. **Top10부터 KRX + NXT(넥스트레이드 ATS) 두 거래소를 동시 추적.**
 
 #### 데이터 경로
 
 ```
-[Naver Mobile API]                                                       
-    ↓ (장중 2초마다 polling)                                              
-[worker: price_poller]                                                  
-    │                                                                    
-    ├─→ Redis SET  "price:{EXCHANGE}:{SYMBOL}"   TTL 60s   (현재가 캐시) 
-    ├─→ Redis PUB  "ticks.{EXCHANGE}.{SYMBOL}"            (실시간 fan-out)
-    └─→ 분 경계마다 INSERT prices(interval='1m', ...)      (히스토리 영속)
-                                                                          
-                          ┌──── Redis SUBSCRIBE                          
-                          │                                              
-[FastAPI WebSocket]  ──── ┘                                              
-GET /ws/prices/{exchange}/{symbol}                                       
-    ↓ (서버 → 브라우저 push)                                              
-[Browser]  ─── chart.update(tick)                                        
+[polling.finance.naver.com]   ← 한 응답에 KRX + NXT 두 leg 동시 반환
+    ↓ (장중 5초마다 polling, 08:00-20:00 KST 윈도우)
+[worker: price_poller]
+    │   for each venue in [KRX, NXT]:
+    ├─→ Redis SET  "price:{EX}:{SYM}:{VENUE}"   TTL 60s
+    ├─→ Redis PUB  "ticks.{EX}.{SYM}"  (payload에 venue 필드)
+    └─→ 분 경계마다 INSERT prices(interval='1m', venue=..., ...)
+
+                          ┌──── Redis SUBSCRIBE
+                          │
+[FastAPI WebSocket]  ──── ┘  (단일 채널, venue별로 메시지 2개씩 흐름)
+GET /ws/prices/{exchange}/{symbol}
+    ↓
+[Browser]  ─── 탭(KRX/NXT/통합)에 따라 라우팅
 ```
 
-#### 명명 규약
+#### 명명 규약 (Top10 변경)
 
-- Redis 키 (캐시): `price:{EXCHANGE}:{SYMBOL}` (예: `price:KR:005930`)
-  - 값: JSON `{"close": ..., "volume_cum": ..., "ts": "..."}`
-  - TTL 60초 — 워커 죽으면 자동 만료
-- Redis 채널 (Pub/Sub): `ticks.{EXCHANGE}.{SYMBOL}` (예: `ticks.KR.005930`)
-- WebSocket 경로: `/ws/prices/{exchange}/{symbol}` (예: `/ws/prices/KR/005930`)
+- Redis 캐시: `price:{EXCHANGE}:{SYMBOL}:{VENUE}` — venue별 분리. 예: `price:KR:005930:KRX`, `price:KR:005930:NXT`. WS 최초 프레임에서 두 venue의 캐시 모두 전송.
+- Redis 채널 (Pub/Sub): `ticks.{EXCHANGE}.{SYMBOL}` — 단일 채널, payload에 `venue` 필드. 프론트가 venue 보고 탭별로 분기.
+- WebSocket 경로: `/ws/prices/{exchange}/{symbol}` (변경 없음)
+- DB: `prices.venue` 컬럼 추가 + PK 확장 `(instrument_id, interval, venue, time)`. 같은 분의 KRX/NXT 봉이 두 행으로 공존.
 
 #### 폴링 주기 & 시장 시간
 
-- **KR 정규장 (09:00~15:30 KST)**: 2초 (실시간 체감 + Naver IP 차단 위험 낮춤)
-- **시간외/휴장**: 폴링 중단 (Naver API 부하 + 약관 회색지대 줄임)
-- 시장 시간 판단: 일단 `zoneinfo` + 요일/시간 단순 판단. 정확한 휴장(R15)은 `pandas_market_calendars` 또는 KRX 휴장 API로 추후 보강.
+- **폴링 윈도우**: 08:00-20:00 KST 평일 (NXT 운영시간 union). 그 안에 KRX 정규장(09:00-15:30)과 NXT 프리/메인/애프터가 다 포함됨.
+- **주기**: 5초 (Naver polling endpoint가 `pollingInterval=70000` 권장하지만 본인용이라 보수적으로 5초). 차단 시 10초로 상향 고려.
+- **시간외/휴장**: 폴링 중단. 정확한 휴장 처리는 R15에서 다룸.
 
-#### 1분봉 집계
+#### 1분봉 집계 (per-venue)
 
-워커가 2초마다 tick을 메모리 버퍼에 누적 → 분 경계 도달 시 OHLCV로 집계 → `prices(interval='1m')` UPSERT.
-
-- `open` = 분의 첫 tick close
-- `high` = 분 내 max
-- `low` = 분 내 min
-- `close` = 분의 마지막 tick close
-- `volume` = (분 끝 누적거래량) - (분 시작 누적거래량). Naver API는 누적 거래량 반환.
+워커는 venue별 별도 메모리 버퍼를 유지. tick이 들어오면 venue 키로 분기 → 분 경계 시 KRX/NXT가 각자 1m bar로 UPSERT. KRX와 NXT의 high/low가 같은 분에 다를 수 있어 venue 분리 필수.
 
 #### Singleton 보장
 
-워커 컨테이너가 실수로 다중 기동되어도 한 종목당 하나만 폴링하도록 Redis 락:
 ```
-SET "lock:poller:{EXCHANGE}:{SYMBOL}" "<worker-id>" NX EX 5
+SET "lock:poller:{EXCHANGE}:{SYMBOL}" "<worker-id>" NX EX 10
 ```
-TTL 5초로 짧게 — 폴링 간격(2초)보다 길고, 워커 죽으면 곧 만료. 안전한 fail-over.
+TTL 10초 — 5초 폴링 간격보다 여유 있게.
 
 #### 절대 하지 말 것
 

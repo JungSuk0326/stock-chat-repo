@@ -36,8 +36,14 @@ def _channel(exchange: str, symbol: str) -> str:
     return f"ticks.{exchange}.{symbol}"
 
 
-def _cache_key(exchange: str, symbol: str) -> str:
-    return f"price:{exchange}:{symbol}"
+def _cache_key(exchange: str, symbol: str, venue: str) -> str:
+    return f"price:{exchange}:{symbol}:{venue}"
+
+
+# Venues we attempt to deliver on initial connect. NXT may not have a cached
+# tick yet (worker hasn't run during NXT hours), in which case its cache get
+# returns None and we silently skip — same as KRX before the first tick.
+_VENUES = ("KRX", "NXT")
 
 
 async def _instrument_exists(exchange: str, symbol: str) -> bool:
@@ -78,10 +84,17 @@ async def ws_prices(
     await pubsub.subscribe(channel)
 
     try:
-        # Initial frame: last cached tick (avoids up-to-2s "empty chart" gap)
-        cached = await redis_client.get(_cache_key(exchange_norm, symbol_norm))
-        if cached:
-            await websocket.send_text(cached)
+        # Initial frames: last cached tick for each venue we know about.
+        # Sending both avoids the "empty NXT line until next 5s tick" gap
+        # the moment a user opens the chart on the NXT or 통합 tab.
+        for venue in _VENUES:
+            cached = await redis_client.get(
+                _cache_key(exchange_norm, symbol_norm, venue)
+            )
+            if cached:
+                await websocket.send_text(
+                    cached if isinstance(cached, str) else cached.decode()
+                )
 
         forward_task = asyncio.create_task(
             _forward_ticks(pubsub, websocket),

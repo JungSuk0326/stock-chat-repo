@@ -41,9 +41,13 @@ class RealtimePrice(BaseModel):
     `volume_cum` is the cumulative trading volume for the current trading day,
     not the volume since the last tick. Per-minute bar volume is computed as
     (this minute's last cum) - (this minute's first cum) by the caller.
+
+    `venue` separates KRX (한국거래소 정규장) from NXT (넥스트레이드 ATS).
+    For non-KR adapters this is the exchange code (NYSE / NASDAQ / ...).
     """
 
     ts: datetime  # server-reported trade timestamp (UTC)
+    venue: str = "KRX"
     close: Decimal
     open: Decimal | None = None
     high: Decimal | None = None

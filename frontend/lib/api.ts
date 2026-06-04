@@ -39,12 +39,16 @@ export interface PriceBar {
 export interface PriceSeriesResponse {
   instrument: string;
   interval: string;
+  venue: string; // "KRX" | "NXT"
   bars: PriceBar[];
 }
+
+export type Venue = "KRX" | "NXT";
 
 export interface Tick {
   exchange: string;
   symbol: string;
+  venue: Venue;
   ts: string;
   close: string;
   volume_cum: number;
@@ -222,10 +226,12 @@ export function getPrices(args: {
   symbol: string;
   days?: number;
   interval?: string;
+  venue?: Venue;
 }): Promise<PriceSeriesResponse> {
   const qs = new URLSearchParams();
   if (args.days !== undefined) qs.set("days", String(args.days));
   if (args.interval) qs.set("interval", args.interval);
+  if (args.venue) qs.set("venue", args.venue);
   return http<PriceSeriesResponse>(
     `/prices/${args.exchange}/${args.symbol}?${qs.toString()}`,
   );

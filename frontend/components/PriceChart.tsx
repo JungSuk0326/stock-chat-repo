@@ -69,17 +69,37 @@ function sameSet<T>(a: Set<T>, b: Set<T>): boolean {
   return true;
 }
 
+export type ChartVenue = "KRX" | "NXT" | "COMBINED";
+
 interface Props {
   exchange: string;
   symbol: string;
+  /**
+   * Trading venue tab. KRX = 정규장 (default, pre-NXT behavior).
+   * NXT = 넥스트레이드 ATS (08:00-20:00 KST).
+   * COMBINED = KRX candles + NXT close as a dashed overlay line on top —
+   *   indicators stay anchored to KRX since that's the "primary" reference.
+   */
+  venue?: ChartVenue;
 }
 
-export function PriceChart({ exchange, symbol }: Props) {
+export function PriceChart({ exchange, symbol, venue = "KRX" }: Props) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  // NXT overlay line in COMBINED mode. Holds NXT close as a single colored
+  // line — no candles since the "primary" pane is KRX. todayBarNxtRef
+  // tracks the current trading-day's last NXT close so live ticks can
+  // update.replace the same point instead of pushing a new one each tick.
+  const nxtLineSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const todayBarRef = useRef<CandleBar | null>(null);
+  const todayNxtTimeRef = useRef<string | null>(null);
+
+  // KRX is the "primary" venue for COMBINED — it owns candles, volume, and
+  // indicator inputs. NXT in COMBINED is a reference overlay only.
+  const primaryVenue: "KRX" | "NXT" = venue === "NXT" ? "NXT" : "KRX";
+  const showNxtOverlay = venue === "COMBINED";
 
   // Indicator state — selection lives globally (localStorage), series refs
   // are per chart instance (lifecycle tied to the chart).
@@ -206,8 +226,24 @@ export function PriceChart({ exchange, symbol }: Props) {
     candleSeriesRef.current = candleSeries;
     volumeSeriesRef.current = volumeSeries;
 
+    // COMBINED mode: an extra dashed line series sits ON TOP of the candle
+    // pane and tracks NXT close. Same price scale as candles so the two
+    // venues' prices are directly comparable on the y-axis.
+    if (showNxtOverlay) {
+      const nxtSeries = chart.addSeries(LineSeries, {
+        color: "#7c3aed",  // 보라색 — 지표 색과 안 겹침
+        lineWidth: 2,
+        lineStyle: LineStyle.Dashed,
+        priceLineVisible: false,
+        lastValueVisible: true,
+      });
+      nxtLineSeriesRef.current = nxtSeries;
+    }
+
     let cancelled = false;
-    getPrices({ exchange, symbol, days: 365 })
+
+    // Primary series fetch (KRX or NXT depending on `venue` prop).
+    getPrices({ exchange, symbol, days: 365, venue: primaryVenue })
       .then((data) => {
         if (cancelled) return;
         const candleData = data.bars.map((b) => ({
@@ -250,6 +286,28 @@ export function PriceChart({ exchange, symbol }: Props) {
         setHistoryStatus("error");
       });
 
+    // NXT overlay fetch (COMBINED mode only). Independent promise — a slow
+    // or empty NXT response shouldn't delay the primary chart render.
+    if (showNxtOverlay) {
+      getPrices({ exchange, symbol, days: 365, venue: "NXT" })
+        .then((data) => {
+          if (cancelled) return;
+          const series = nxtLineSeriesRef.current;
+          if (!series) return;
+          const lineData = data.bars.map((b) => ({
+            time: b.time.slice(0, 10) as Time,
+            value: Number(b.close),
+          }));
+          series.setData(lineData);
+          const lastNxt = data.bars[data.bars.length - 1];
+          if (lastNxt) todayNxtTimeRef.current = lastNxt.time.slice(0, 10);
+        })
+        .catch((err: unknown) => {
+          // Non-fatal — log only. The KRX side stays usable.
+          console.warn("NXT overlay fetch failed:", err);
+        });
+    }
+
     const handleResize = () => {
       chart.applyOptions({ width: container.clientWidth });
     };
@@ -262,12 +320,14 @@ export function PriceChart({ exchange, symbol }: Props) {
       chartRef.current = null;
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
+      nxtLineSeriesRef.current = null;
+      todayNxtTimeRef.current = null;
       // Indicator series live on the chart we just destroyed — drop the
       // refs so the settings-sync effect knows to recreate them when a
       // new chart mounts.
       indicatorSeriesRef.current = new Map();
     };
-  }, [exchange, symbol, applyAllIndicators]);
+  }, [exchange, symbol, applyAllIndicators, primaryVenue, showNxtOverlay]);
 
   // ----- Sync indicator series with selection -----
   // Reconciles series with `selected` in one shot. Gated on closes
@@ -377,12 +437,31 @@ export function PriceChart({ exchange, symbol }: Props) {
     let cancelled = false;
 
     const applyTick = (tick: Tick) => {
+      // Each WS message carries `venue`. Route by mode:
+      //   - KRX or NXT solo: only that venue's ticks update the candles.
+      //   - COMBINED: KRX ticks update candles+volume+indicators (primary),
+      //     NXT ticks update only the NXT overlay line.
+      const tickVenue = tick.venue ?? "KRX";
+      const isPrimary = tickVenue === primaryVenue;
+      const isNxtOverlay = showNxtOverlay && tickVenue === "NXT";
+      if (!isPrimary && !isNxtOverlay) return;
+
+      // LiveBadge shows the last tick of either venue — feels more "alive".
       setLastTick(tick);
       setLiveStatus("live");
 
       const tickClose = Number(tick.close);
       const tickDate = new Date(tick.ts);
       const today = toDateStr(tickDate);
+
+      if (isNxtOverlay) {
+        // Just update the NXT line; don't touch candles/indicators.
+        const nxtSeries = nxtLineSeriesRef.current;
+        if (!nxtSeries) return;
+        nxtSeries.update({ time: today as Time, value: tickClose });
+        todayNxtTimeRef.current = today;
+        return;
+      }
 
       const candleSeries = candleSeriesRef.current;
       const volumeSeries = volumeSeriesRef.current;
@@ -473,7 +552,7 @@ export function PriceChart({ exchange, symbol }: Props) {
       if (retryTimer) clearTimeout(retryTimer);
       if (ws && ws.readyState <= WebSocket.OPEN) ws.close();
     };
-  }, [exchange, symbol, applyAllIndicators]);
+  }, [exchange, symbol, applyAllIndicators, primaryVenue, showNxtOverlay]);
 
   const enabledIndicatorsLegend = useMemo(
     () => INDICATORS.filter((i) => selected.has(i.id)),

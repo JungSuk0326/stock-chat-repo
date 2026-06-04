@@ -20,4 +20,5 @@ class PriceBar(BaseModel):
 class PriceSeriesResponse(BaseModel):
     instrument: str  # canonical id, e.g. "KR:005930"
     interval: str  # "1d", "1h", "1m" ...
+    venue: str = "KRX"  # KRX | NXT — the trading venue this series belongs to
     bars: list[PriceBar]

@@ -2,15 +2,30 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useMemo } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 
 import { AlertsPanel } from "@/components/AlertsPanel";
 import { ChatPanel } from "@/components/ChatPanel";
 import { MarketFeedPanel } from "@/components/MarketFeedPanel";
-import { PriceChart } from "@/components/PriceChart";
+import { PriceChart, type ChartVenue } from "@/components/PriceChart";
 import { WatchlistPanel } from "@/components/WatchlistPanel";
 
 const DEFAULT_SELECTED = "KR:005930";
+
+const VENUE_TABS: { value: ChartVenue; label: string; hint: string }[] = [
+  { value: "KRX", label: "KRX", hint: "정규장 09:00-15:30" },
+  { value: "NXT", label: "NXT", hint: "넥스트레이드 08:00-20:00" },
+  { value: "COMBINED", label: "통합", hint: "KRX + NXT 오버레이" },
+];
+
+const VENUE_STORAGE_KEY = "stock-advisor:chart-venue";
+
+function loadVenue(): ChartVenue {
+  if (typeof window === "undefined") return "KRX";
+  const v = window.localStorage.getItem(VENUE_STORAGE_KEY);
+  if (v === "KRX" || v === "NXT" || v === "COMBINED") return v;
+  return "KRX";
+}
 
 function parseSymbol(value: string | null): { exchange: string; symbol: string } {
   const raw = (value ?? DEFAULT_SELECTED).trim();
@@ -26,6 +41,21 @@ function PageBody() {
     () => parseSymbol(searchParams.get("symbol")),
     [searchParams],
   );
+
+  // Chart venue tab — KRX (정규장) / NXT (넥스트레이드) / 통합 (오버레이).
+  // SSR-safe default; hydrate from localStorage post-mount so the user's
+  // last choice persists across reloads.
+  const [venue, setVenue] = useState<ChartVenue>("KRX");
+  useEffect(() => {
+    const stored = loadVenue();
+    if (stored !== "KRX") setVenue(stored);
+  }, []);
+  const handleVenueChange = useCallback((next: ChartVenue) => {
+    setVenue(next);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(VENUE_STORAGE_KEY, next);
+    }
+  }, []);
 
   const handleSelect = useCallback(
     (inst: { exchange: string; symbol: string; name: string | null }) => {
@@ -69,10 +99,35 @@ function PageBody() {
             </Link>
           </header>
 
+          <div className="mb-2 flex items-center gap-1.5 text-sm">
+            {VENUE_TABS.map((t) => (
+              <button
+                key={t.value}
+                type="button"
+                onClick={() => handleVenueChange(t.value)}
+                title={t.hint}
+                className={
+                  "rounded px-3 py-1 transition-colors " +
+                  (venue === t.value
+                    ? "bg-blue-600 text-white"
+                    : "border border-gray-300 bg-white text-gray-700 hover:bg-gray-50")
+                }
+              >
+                {t.label}
+              </button>
+            ))}
+            <span className="ml-2 text-xs text-gray-400">
+              {VENUE_TABS.find((t) => t.value === venue)?.hint}
+            </span>
+          </div>
+
+          {/* venue is part of the key so changing tabs cleanly remounts the
+              chart instead of relying on prop-change re-renders to swap series. */}
           <PriceChart
-            key={`chart:${selected.exchange}:${selected.symbol}`}
+            key={`chart:${selected.exchange}:${selected.symbol}:${venue}`}
             exchange={selected.exchange}
             symbol={selected.symbol}
+            venue={venue}
           />
 
           <div className="mt-4">
