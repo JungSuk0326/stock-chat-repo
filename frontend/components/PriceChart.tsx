@@ -26,7 +26,11 @@ import { bollinger, ema, rsi, sma } from "@/lib/indicators";
 import { ChartSettings } from "./ChartSettings";
 
 interface CandleBar {
-  time: string;
+  // BusinessDay-shaped string ("YYYY-MM-DD") for 1d bars, or UTCTimestamp
+  // (seconds since epoch as number) for 1m bars. lightweight-charts
+  // accepts both — we just need to preserve whichever shape `getPrices`
+  // returned so indicator series stay aligned with the candle series.
+  time: Time;
   open: number;
   high: number;
   low: number;
@@ -156,7 +160,11 @@ export function PriceChart({ exchange, symbol, venue = "KRX" }: Props) {
     new Map(),
   );
   const closesRef = useRef<number[]>([]);
-  const timesRef = useRef<string[]>([]);
+  // Parallel array to closesRef — each element is the lightweight-charts
+  // `Time` for that close. Stays mixed-type across modes (strings for
+  // daily, numbers for intraday) so applyIndicator can pass `times[i]`
+  // straight back to setData without re-parsing.
+  const timesRef = useRef<Time[]>([]);
 
   const [historyStatus, setHistoryStatus] = useState<"loading" | "ready" | "error">("loading");
   const [historyError, setHistoryError] = useState<string>("");
@@ -193,7 +201,7 @@ export function PriceChart({ exchange, symbol, venue = "KRX" }: Props) {
     ): { time: Time; value: number }[] =>
       values
         .map((v, i) =>
-          v === null ? null : { time: times[i] as Time, value: v },
+          v === null ? null : { time: times[i], value: v },
         )
         .filter((p): p is { time: Time; value: number } => p !== null);
 
@@ -301,15 +309,15 @@ export function PriceChart({ exchange, symbol, venue = "KRX" }: Props) {
         chart.timeScale().fitContent();
 
         closesRef.current = candleData.map((b) => b.close);
-        // For indicator alignment we need parallel `times`. Stored as raw
-        // bar value (string for 1d, number for 1m) — only consumed by
-        // applyIndicator which passes it back to lightweight-charts.
-        timesRef.current = candleData.map((b) => b.time as unknown as string);
+        // Parallel `times` for indicator alignment — preserve the raw Time
+        // value (string for 1d BusinessDay, number for 1m UTCTimestamp)
+        // so applyIndicator can hand it back to setData without parsing.
+        timesRef.current = candleData.map((b) => b.time);
 
         const last = candleData[candleData.length - 1];
         if (last) {
           todayBarRef.current = {
-            time: last.time as unknown as string,
+            time: last.time,
             open: last.open,
             high: last.high,
             low: last.low,
@@ -514,10 +522,12 @@ export function PriceChart({ exchange, symbol, venue = "KRX" }: Props) {
       if (!candleSeries || !volumeSeries) return;
 
       let bar = todayBarRef.current;
-      const isNewBar = !bar || String(bar.time) !== String(barTime);
+      // Compare raw Time values — works whether they're strings (1d) or
+      // numbers (1m). lightweight-charts treats both as `Time`.
+      const isNewBar = !bar || bar.time !== barTime;
       if (isNewBar) {
         bar = {
-          time: String(barTime),
+          time: barTime,
           open: tickClose,
           high: tickClose,
           low: tickClose,

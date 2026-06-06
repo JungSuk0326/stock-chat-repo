@@ -49,7 +49,12 @@ function formatKstTime(iso: string): string {
   }
 }
 
-function loadInitialTab(): TabId {
+/**
+ * Read the persisted tab choice. Called from a post-mount effect — never
+ * during render — to avoid SSR/client hydration mismatch (server has no
+ * localStorage and would render a different active tab than the client).
+ */
+function loadStoredTab(): TabId {
   if (typeof window === "undefined") return "disclosures";
   const saved = window.localStorage.getItem(TAB_STORAGE_KEY);
   if (saved === "news" || saved === "flows") return saved;
@@ -76,7 +81,16 @@ function formatSignedVolume(n: number): string {
  * 활성 탭은 localStorage에 영속화.
  */
 export function MarketFeedPanel({ exchange, symbol }: Props) {
-  const [tab, setTab] = useState<TabId>(loadInitialTab);
+  // SSR-safe default; hydrate from localStorage in a post-mount effect.
+  // useState lazy init that touches `window` would lose to Next.js SSR —
+  // the server renders the default, hydration freezes that DOM, and the
+  // active-tab underline ends up under the wrong tab → recoverable
+  // hydration mismatch warning.
+  const [tab, setTab] = useState<TabId>("disclosures");
+  useEffect(() => {
+    const stored = loadStoredTab();
+    if (stored !== "disclosures") setTab(stored);
+  }, []);
 
   const [disclosures, setDisclosures] = useState<DisclosureItem[] | null>(null);
   const [news, setNews] = useState<NewsItem[] | null>(null);
