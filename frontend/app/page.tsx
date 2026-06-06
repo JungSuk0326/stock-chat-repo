@@ -12,6 +12,16 @@ import { WatchlistPanel } from "@/components/WatchlistPanel";
 
 const DEFAULT_SELECTED = "KR:005930";
 
+/**
+ * NXT(넥스트레이드) UI 토글. 현재 false — 백엔드는 NXT 폴링 + 1m→1d 집계를
+ * 계속하지만, UI 탭은 숨김. 이유:
+ *   - KRX는 1d, NXT는 1m이라 시각적 통일성이 부족
+ *   - NXT 일봉이 충분히 쌓이려면 시간 필요 (출범 1년+, 실시간 외 공개 시계열 없음)
+ *   - 본격적인 venue별 분석은 KIS API 같은 정식 경로로 갈아탄 후가 자연스러움
+ * true로 돌리면 즉시 탭 + 차트가 부활. 한 줄짜리 feature flag로 유지.
+ */
+const NXT_UI_VISIBLE = false;
+
 const VENUE_TABS: { value: ChartVenue; label: string; hint: string }[] = [
   { value: "KRX", label: "KRX", hint: "정규장 09:00-15:30" },
   { value: "NXT", label: "NXT", hint: "넥스트레이드 08:00-20:00" },
@@ -21,6 +31,7 @@ const VENUE_TABS: { value: ChartVenue; label: string; hint: string }[] = [
 const VENUE_STORAGE_KEY = "stock-advisor:chart-venue";
 
 function loadVenue(): ChartVenue {
+  if (!NXT_UI_VISIBLE) return "KRX";
   if (typeof window === "undefined") return "KRX";
   const v = window.localStorage.getItem(VENUE_STORAGE_KEY);
   if (v === "KRX" || v === "NXT" || v === "COMBINED") return v;
@@ -99,27 +110,29 @@ function PageBody() {
             </Link>
           </header>
 
-          <div className="mb-2 flex items-center gap-1.5 text-sm">
-            {VENUE_TABS.map((t) => (
-              <button
-                key={t.value}
-                type="button"
-                onClick={() => handleVenueChange(t.value)}
-                title={t.hint}
-                className={
-                  "rounded px-3 py-1 transition-colors " +
-                  (venue === t.value
-                    ? "bg-blue-600 text-white"
-                    : "border border-gray-300 bg-white text-gray-700 hover:bg-gray-50")
-                }
-              >
-                {t.label}
-              </button>
-            ))}
-            <span className="ml-2 text-xs text-gray-400">
-              {VENUE_TABS.find((t) => t.value === venue)?.hint}
-            </span>
-          </div>
+          {NXT_UI_VISIBLE && (
+            <div className="mb-2 flex items-center gap-1.5 text-sm">
+              {VENUE_TABS.map((t) => (
+                <button
+                  key={t.value}
+                  type="button"
+                  onClick={() => handleVenueChange(t.value)}
+                  title={t.hint}
+                  className={
+                    "rounded px-3 py-1 transition-colors " +
+                    (venue === t.value
+                      ? "bg-blue-600 text-white"
+                      : "border border-gray-300 bg-white text-gray-700 hover:bg-gray-50")
+                  }
+                >
+                  {t.label}
+                </button>
+              ))}
+              <span className="ml-2 text-xs text-gray-400">
+                {VENUE_TABS.find((t) => t.value === venue)?.hint}
+              </span>
+            </div>
+          )}
 
           {/* venue is part of the key so changing tabs cleanly remounts the
               chart instead of relying on prop-change re-renders to swap series. */}

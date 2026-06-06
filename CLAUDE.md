@@ -53,7 +53,7 @@
 - [x] `app/scripts/sync_instruments.py`, `sync_prices.py` 수동 실행 스크립트
 - [x] 실시간 시세 워커 — **5초 폴링** (Top10), Redis 캐시/Pub-Sub, 1분봉 적재. **KRX + NXT 동시** (polling.finance.naver.com), 08:00-20:00 KST 폴링 윈도우, venue별 별도 1m 버퍼/캐시
 - [x] WebSocket `/ws/prices/{exchange}/{symbol}` (4404 close code, 자동 cleanup)
-- [x] 프론트엔드 라이브 차트 — WS 자동 재연결(지수 백오프) + 오늘 봉 실시간 업데이트 + LIVE/재연결 중 뱃지 + **KRX/NXT/통합 탭** (Top10). KRX/통합 = 1d, NXT 단독 = 1m intraday (NXT는 일자별 외부 API가 없어 분봉 표시; 1m→1d는 자체 EOD 집계로 매일 1개씩 누적)
+- [x] 프론트엔드 라이브 차트 — WS 자동 재연결(지수 백오프) + 오늘 봉 실시간 업데이트 + LIVE/재연결 중 뱃지. **NXT/통합 탭 UI는 `NXT_UI_VISIBLE=false`로 숨김** (Top10 — 1d/1m 시각 통일성 부족 + 일봉 누적 대기 중). 백엔드는 NXT 폴링 + 1m→1d 집계 계속 → 데이터가 시간에 따라 채워짐. 본격 활용은 KIS API 같은 정식 경로로 갈아탄 후
 - [x] **다종목 watchlist** — DB watchlist 테이블 + CRUD API + 동적 워커 (30s sync, add/remove auto)
 - [x] **종목 검색 + URL 라우팅** — `?symbol=KR:000660`, 사이드바 + SearchModal
 - [x] **신규 watchlist 종목 자동 EOD backfill** — reconcile 시점에 1년치 일봉 fire-and-forget
