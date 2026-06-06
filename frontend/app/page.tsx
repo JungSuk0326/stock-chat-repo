@@ -78,9 +78,9 @@ function PageBody() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <div className="mx-auto flex max-w-[1800px] gap-6 p-6">
-        <div className="w-64 shrink-0">
-          <div className="sticky top-6 rounded-lg bg-white p-4 shadow">
+      <div className="mx-auto flex max-w-[1800px] flex-col gap-4 p-3 lg:flex-row lg:gap-6 lg:p-6">
+        <div className="w-full lg:w-64 lg:shrink-0">
+          <div className="rounded-lg bg-white p-4 shadow lg:sticky lg:top-6">
             <WatchlistPanel
               selected={selected}
               onSelect={(inst) =>
@@ -95,7 +95,7 @@ function PageBody() {
         </div>
 
         <main className="min-w-0 flex-1">
-          <header className="mb-4 flex items-baseline gap-4">
+          <header className="mb-4 flex flex-wrap items-baseline gap-4">
             <h1 className="text-2xl font-bold text-gray-900">
               {selected.exchange}:{selected.symbol}
             </h1>
@@ -160,8 +160,8 @@ function PageBody() {
           </div>
         </main>
 
-        <aside className="w-[420px] shrink-0">
-          <div className="sticky top-6">
+        <aside className="w-full lg:w-[420px] lg:shrink-0">
+          <div className="lg:sticky lg:top-6">
             <ChatPanel
               key={`chat:${selected.exchange}:${selected.symbol}`}
               exchange={selected.exchange}

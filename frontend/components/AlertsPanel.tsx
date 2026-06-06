@@ -169,7 +169,7 @@ export function AlertsPanel({ exchange, symbol }: Props) {
 
       {/* Create form */}
       <form onSubmit={handleCreate} className="mb-4 space-y-2">
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <select
             value={conditionType}
             onChange={(e) =>
@@ -198,7 +198,7 @@ export function AlertsPanel({ exchange, symbol }: Props) {
             onChange={(e) => setNameInput(e.target.value)}
             placeholder="이름 (선택)"
             maxLength={128}
-            className="flex-1 rounded border border-gray-300 px-2 py-1 text-sm text-gray-900 placeholder:text-gray-400"
+            className="min-w-0 flex-1 rounded border border-gray-300 px-2 py-1 text-sm text-gray-900 placeholder:text-gray-400"
           />
           <button
             type="submit"
