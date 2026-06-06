@@ -41,6 +41,27 @@ function toDateStr(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
+/**
+ * lightweight-charts time formats:
+ *   - daily bars: `"YYYY-MM-DD"` (BusinessDay-shaped string)
+ *   - intraday:   UTCTimestamp = unix seconds (integer)
+ *
+ * NXT solo chart shows 1m intraday so the x-axis must be timestamp-based.
+ * Daily charts keep the date-string format which auto-positions one bar
+ * per business day with KRX's familiar look.
+ */
+function toBarTime(isoOrDate: string, interval: string): Time {
+  if (interval === "1m") {
+    return Math.floor(new Date(isoOrDate).getTime() / 1000) as Time;
+  }
+  return isoOrDate.slice(0, 10) as Time;
+}
+
+/** Floor a date to its UTC minute (seconds since epoch). */
+function utcMinuteSeconds(d: Date): number {
+  return Math.floor(d.getTime() / 60000) * 60;
+}
+
 // ---------- Indicator-series ref shape ----------
 // Bollinger is one toggle but three series; everything else is single.
 
@@ -100,6 +121,14 @@ export function PriceChart({ exchange, symbol, venue = "KRX" }: Props) {
   // indicator inputs. NXT in COMBINED is a reference overlay only.
   const primaryVenue: "KRX" | "NXT" = venue === "NXT" ? "NXT" : "KRX";
   const showNxtOverlay = venue === "COMBINED";
+
+  // NXT solo uses 1m intraday since the daily series only just started
+  // accumulating (see app/services/nxt_eod_aggregator.py). 7-day window
+  // keeps the bar count manageable (~5k candles max) while showing the
+  // intraday flow that makes NXT worth watching. KRX/COMBINED stay on 1d.
+  const primaryInterval: "1d" | "1m" = venue === "NXT" ? "1m" : "1d";
+  const primaryDays = venue === "NXT" ? 7 : 365;
+  const isIntraday = primaryInterval === "1m";
 
   // Indicator state — selection lives globally (localStorage), series refs
   // are per chart instance (lifecycle tied to the chart).
@@ -204,7 +233,10 @@ export function PriceChart({ exchange, symbol, venue = "KRX" }: Props) {
         vertLines: { color: "#f3f4f6" },
         horzLines: { color: "#f3f4f6" },
       },
-      timeScale: { timeVisible: false, secondsVisible: false },
+      timeScale: {
+        timeVisible: isIntraday,  // NXT 1m needs HH:MM on the x-axis
+        secondsVisible: false,
+      },
     });
     chartRef.current = chart;
 
@@ -243,18 +275,24 @@ export function PriceChart({ exchange, symbol, venue = "KRX" }: Props) {
     let cancelled = false;
 
     // Primary series fetch (KRX or NXT depending on `venue` prop).
-    getPrices({ exchange, symbol, days: 365, venue: primaryVenue })
+    getPrices({
+      exchange,
+      symbol,
+      days: primaryDays,
+      interval: primaryInterval,
+      venue: primaryVenue,
+    })
       .then((data) => {
         if (cancelled) return;
         const candleData = data.bars.map((b) => ({
-          time: b.time.slice(0, 10) as Time,
+          time: toBarTime(b.time, primaryInterval),
           open: Number(b.open),
           high: Number(b.high),
           low: Number(b.low),
           close: Number(b.close),
         }));
         const volumeData = data.bars.map((b) => ({
-          time: b.time.slice(0, 10) as Time,
+          time: toBarTime(b.time, primaryInterval),
           value: b.volume,
           color: Number(b.close) >= Number(b.open) ? "#ef444466" : "#3b82f666",
         }));
@@ -263,12 +301,15 @@ export function PriceChart({ exchange, symbol, venue = "KRX" }: Props) {
         chart.timeScale().fitContent();
 
         closesRef.current = candleData.map((b) => b.close);
-        timesRef.current = candleData.map((b) => b.time as string);
+        // For indicator alignment we need parallel `times`. Stored as raw
+        // bar value (string for 1d, number for 1m) — only consumed by
+        // applyIndicator which passes it back to lightweight-charts.
+        timesRef.current = candleData.map((b) => b.time as unknown as string);
 
         const last = candleData[candleData.length - 1];
         if (last) {
           todayBarRef.current = {
-            time: last.time as string,
+            time: last.time as unknown as string,
             open: last.open,
             high: last.high,
             low: last.low,
@@ -452,14 +493,19 @@ export function PriceChart({ exchange, symbol, venue = "KRX" }: Props) {
 
       const tickClose = Number(tick.close);
       const tickDate = new Date(tick.ts);
-      const today = toDateStr(tickDate);
+      // Bar identity: for 1d charts it's the calendar date; for 1m it's
+      // the UTC-minute timestamp (in seconds). Either type is `Time` from
+      // lightweight-charts' perspective.
+      const barTime: Time = isIntraday
+        ? (utcMinuteSeconds(tickDate) as Time)
+        : (toDateStr(tickDate) as Time);
 
       if (isNxtOverlay) {
         // Just update the NXT line; don't touch candles/indicators.
         const nxtSeries = nxtLineSeriesRef.current;
         if (!nxtSeries) return;
-        nxtSeries.update({ time: today as Time, value: tickClose });
-        todayNxtTimeRef.current = today;
+        nxtSeries.update({ time: barTime, value: tickClose });
+        todayNxtTimeRef.current = String(barTime);
         return;
       }
 
@@ -468,10 +514,10 @@ export function PriceChart({ exchange, symbol, venue = "KRX" }: Props) {
       if (!candleSeries || !volumeSeries) return;
 
       let bar = todayBarRef.current;
-      const isNewDay = !bar || bar.time !== today;
-      if (isNewDay) {
+      const isNewBar = !bar || String(bar.time) !== String(barTime);
+      if (isNewBar) {
         bar = {
-          time: today,
+          time: String(barTime),
           open: tickClose,
           high: tickClose,
           low: tickClose,
@@ -485,25 +531,25 @@ export function PriceChart({ exchange, symbol, venue = "KRX" }: Props) {
       todayBarRef.current = bar;
 
       candleSeries.update({
-        time: bar!.time as Time,
+        time: barTime,
         open: bar!.open,
         high: bar!.high,
         low: bar!.low,
         close: bar!.close,
       });
       volumeSeries.update({
-        time: bar!.time as Time,
+        time: barTime,
         value: tick.volume_cum,
         color: bar!.close >= bar!.open ? "#ef444466" : "#3b82f666",
       });
 
       // Keep closes/times in sync with the live bar so indicators reflect
-      // the current price, not yesterday's close.
+      // the current price, not the prior bar's close.
       const closes = closesRef.current;
       const times = timesRef.current;
       if (closes.length === 0) return; // history hasn't loaded yet
 
-      if (isNewDay) {
+      if (isNewBar) {
         closes.push(bar!.close);
         times.push(bar!.time);
       } else {

@@ -53,11 +53,12 @@
 - [x] `app/scripts/sync_instruments.py`, `sync_prices.py` 수동 실행 스크립트
 - [x] 실시간 시세 워커 — **5초 폴링** (Top10), Redis 캐시/Pub-Sub, 1분봉 적재. **KRX + NXT 동시** (polling.finance.naver.com), 08:00-20:00 KST 폴링 윈도우, venue별 별도 1m 버퍼/캐시
 - [x] WebSocket `/ws/prices/{exchange}/{symbol}` (4404 close code, 자동 cleanup)
-- [x] 프론트엔드 라이브 차트 — WS 자동 재연결(지수 백오프) + 오늘 봉 실시간 업데이트 + LIVE/재연결 중 뱃지 + **KRX/NXT/통합 탭** (Top10, venue별 차트 분리 + 통합모드는 NXT close를 점선 오버레이로 합성)
+- [x] 프론트엔드 라이브 차트 — WS 자동 재연결(지수 백오프) + 오늘 봉 실시간 업데이트 + LIVE/재연결 중 뱃지 + **KRX/NXT/통합 탭** (Top10). KRX/통합 = 1d, NXT 단독 = 1m intraday (NXT는 일자별 외부 API가 없어 분봉 표시; 1m→1d는 자체 EOD 집계로 매일 1개씩 누적)
 - [x] **다종목 watchlist** — DB watchlist 테이블 + CRUD API + 동적 워커 (30s sync, add/remove auto)
 - [x] **종목 검색 + URL 라우팅** — `?symbol=KR:000660`, 사이드바 + SearchModal
 - [x] **신규 watchlist 종목 자동 EOD backfill** — reconcile 시점에 1년치 일봉 fire-and-forget
 - [x] **매일 EOD 일봉 sync** — 16:00 KST cron, watchlist 전체 종목 최근 7일 (멱등 UPSERT). KRX_OPENAPI_KEY 설정 시 정식 OpenAPI(per-date fanout), 미설정 시 pykrx(per-symbol) fallback
+- [x] **NXT EOD 1m→1d 자체 집계** — 20:30 KST cron, NXT는 일자별 시계열 API가 없으므로 워커가 누적한 1분봉을 일별로 SQL aggregate → 1d UPSERT. 백필 불가, 매일 1봉씩 누적 (Top10 Phase 2)
 - [x] **매일 instruments 갱신** — 06:00 KST cron, FDR로 KOSPI/KOSDAQ 전 종목 마스터 UPSERT
 - [x] **DART corp_code 동기화** (R11) — 매일 05:30 KST cron, ZIP/XML 파싱 → 상장사 ~3,900개
 - [x] **DART 공시 수집 워커** — 1분 폴링, watchlist 전체 종목 [today-1, today] KST

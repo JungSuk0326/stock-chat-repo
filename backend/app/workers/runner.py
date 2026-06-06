@@ -55,6 +55,7 @@ from app.services.investor_flow_sync import (
 from app.services.market.kr import KrMarketAdapter
 from app.services.market.krx_openapi import KrxOpenApiClient
 from app.services.market.naver_polling import NaverPollingAdapter
+from app.services.nxt_eod_aggregator import aggregate_nxt_daily_watchlist
 from app.services.market_investor_flow.kr import KrMarketInvestorFlowAdapter
 from app.services.market_investor_flow_sync import daily_market_investor_flow_tick
 from app.services.prices_openapi import sync_eod_watchlist_via_openapi
@@ -639,6 +640,25 @@ async def main() -> None:
         CronTrigger(hour=16, minute=30, timezone="Asia/Seoul"),
         args=[investor_flow_adapter],
         id="investor_flow_sync_daily",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
+    # NXT EOD 1m→1d roll-up at 20:30 KST — runs 30 min after NXT
+    # after-market closes (20:00). NXT has no public daily series API, so
+    # we synthesize it from accumulated 1m bars. Lookback covers worker
+    # downtime; idempotent UPSERT. Backfill of pre-launch days isn't
+    # possible (no upstream source).
+    scheduler.add_job(
+        with_heartbeat(
+            redis_client,
+            "nxt_eod_daily",
+            aggregate_nxt_daily_watchlist,
+        ),
+        CronTrigger(hour=20, minute=30, timezone="Asia/Seoul"),
+        kwargs={"lookback_days": 3},
+        id="nxt_eod_daily",
         coalesce=True,
         max_instances=1,
         misfire_grace_time=3600,
