@@ -1,12 +1,14 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   type DiscoveryCandidateOut,
   type DiscoveryLlmResponse,
+  type LLMModelInfo,
   addToWatchlist,
   discoveryLlmQuery,
+  getLLMModels,
 } from "@/lib/api";
 
 const EXAMPLE_QUERIES = [
@@ -15,6 +17,11 @@ const EXAMPLE_QUERIES = [
   "지난 한 달 외국인 순매도 상위 KOSDAQ",
   "기관이 최근 3개월간 가장 많이 산 종목",
 ];
+
+// Discovery uses its own model preference — keeping it separate from
+// the chat picker lets the user run Flash here (free) while keeping
+// Pro/Opus on chat for quality.
+const MODEL_STORAGE_KEY = "stock-advisor:discovery-model";
 
 function formatWon(v: number): string {
   if (Math.abs(v) >= 1_0000_0000) {
@@ -40,6 +47,50 @@ export function DiscoveryNaturalLanguage() {
   const [error, setError] = useState("");
   const [added, setAdded] = useState<Set<string>>(new Set());
 
+  const [models, setModels] = useState<LLMModelInfo[] | null>(null);
+  const [modelsError, setModelsError] = useState<string>("");
+  const [selectedKey, setSelectedKey] = useState<string>("");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await getLLMModels();
+        if (cancelled) return;
+        setModels(res.models);
+        const saved =
+          typeof window !== "undefined"
+            ? window.localStorage.getItem(MODEL_STORAGE_KEY)
+            : null;
+        const initial =
+          (saved && res.models.find((m) => m.key === saved)?.key) ??
+          (res.default.available ? res.default.key : null) ??
+          res.models[0]?.key ??
+          "";
+        setSelectedKey(initial);
+      } catch (err) {
+        if (cancelled) return;
+        setModelsError(err instanceof Error ? err.message : String(err));
+        setModels([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const selectedModel = useMemo(
+    () => models?.find((m) => m.key === selectedKey) ?? null,
+    [models, selectedKey],
+  );
+
+  const handleModelChange = useCallback((key: string) => {
+    setSelectedKey(key);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(MODEL_STORAGE_KEY, key);
+    }
+  }, []);
+
   const handleSubmit = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
@@ -50,7 +101,11 @@ export function DiscoveryNaturalLanguage() {
       setResponse(null);
       setAdded(new Set());
       try {
-        const res = await discoveryLlmQuery({ query: trimmed });
+        const res = await discoveryLlmQuery({
+          query: trimmed,
+          provider: selectedModel?.provider,
+          model: selectedModel?.model_id,
+        });
         setResponse(res);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -58,7 +113,7 @@ export function DiscoveryNaturalLanguage() {
         setLoading(false);
       }
     },
-    [loading],
+    [loading, selectedModel],
   );
 
   const handleAdd = useCallback(
@@ -84,7 +139,7 @@ export function DiscoveryNaturalLanguage() {
 
   return (
     <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-      <header className="mb-3 flex items-baseline justify-between gap-3">
+      <header className="mb-3 flex items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold text-gray-900">
             자연어 발굴 (AI)
@@ -93,6 +148,29 @@ export function DiscoveryNaturalLanguage() {
             예: &quot;근 1개월간 사모펀드가 가장 많이 산 종목&quot; — 투자자
             수급 기반 발굴
           </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="text-xs font-medium text-gray-500">모델</span>
+          {models === null ? (
+            <span className="text-xs text-gray-400">로딩…</span>
+          ) : models.length === 0 ? (
+            <span className="text-xs text-red-600">
+              {modelsError || "사용 가능한 모델 없음"}
+            </span>
+          ) : (
+            <select
+              value={selectedKey}
+              onChange={(e) => handleModelChange(e.target.value)}
+              disabled={loading}
+              className="rounded border border-gray-300 bg-white px-2 py-1 text-sm text-gray-900 disabled:bg-gray-50"
+            >
+              {models.map((m) => (
+                <option key={m.key} value={m.key}>
+                  {m.display_name} ({m.tier})
+                </option>
+              ))}
+            </select>
+          )}
         </div>
       </header>
 

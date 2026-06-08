@@ -58,7 +58,11 @@ from app.services.market.naver_polling import NaverPollingAdapter
 from app.services.nxt_eod_aggregator import aggregate_nxt_daily_watchlist
 from app.services.market_investor_flow.kr import KrMarketInvestorFlowAdapter
 from app.services.market_investor_flow_sync import daily_market_investor_flow_tick
-from app.services.prices_openapi import sync_eod_watchlist_via_openapi
+from app.services.market.calendar import warm_kr_calendar_cache
+from app.services.prices_openapi import (
+    OpenApiSyncResult,
+    sync_eod_watchlist_via_openapi,
+)
 from app.services.news.kr import NaverNewsAdapter
 from app.services.news_sync import sync_news_for_symbol, sync_news_watchlist
 from app.services.prices import sync_eod_prices, sync_eod_watchlist
@@ -312,6 +316,23 @@ async def main() -> None:
     settings = get_settings()
     configure_logging(settings.ENVIRONMENT, settings.LOG_LEVEL)
 
+    # Warm the KR trading-day cache before the polling scheduler starts.
+    # Without this, the first poller tick blocks on pykrx I/O (~1-2s) the
+    # very moment the worker boots, and weekday holidays may not be
+    # filtered until the lazy load completes.
+    try:
+        trading_days = await warm_kr_calendar_cache()
+        log.info("worker.calendar.warmed", trading_days=trading_days)
+    except Exception as exc:  # noqa: BLE001 — pykrx + network; fail-soft
+        log.warning(
+            "worker.calendar.warm_failed",
+            error=str(exc),
+            note=(
+                "Trading-day cache will populate lazily on first poll tick. "
+                "Holiday filtering still works, but the first tick blocks."
+            ),
+        )
+
     log.info(
         "worker.startup",
         environment=settings.ENVIRONMENT,
@@ -490,32 +511,40 @@ async def main() -> None:
     # worker-downtime gaps; idempotent UPSERT so re-runs are cheap.
     #
     # Routing: prefer KRX OpenAPI (정식 REST API, fanout per-date over all
-    # listings, 1 call per (date × market)). Falls back to pykrx (per-symbol
-    # over date range) when KRX_OPENAPI_KEY isn't configured.
-    if krx_openapi_client is not None:
-        scheduler.add_job(
-            with_heartbeat(
-                redis_client,
-                "eod_sync_daily",
-                sync_eod_watchlist_via_openapi,
-            ),
-            CronTrigger(hour=16, minute=0, timezone="Asia/Seoul"),
-            args=[krx_openapi_client, EOD_SYNC_LOOKBACK_DAYS],
-            id="eod_sync_daily",
-            coalesce=True,
-            max_instances=1,
-            misfire_grace_time=3600,
-        )
-    else:
-        scheduler.add_job(
-            with_heartbeat(redis_client, "eod_sync_daily", sync_eod_watchlist),
-            CronTrigger(hour=16, minute=0, timezone="Asia/Seoul"),
-            args=[kr_adapter, EOD_SYNC_LOOKBACK_DAYS],
-            id="eod_sync_daily",
-            coalesce=True,
-            max_instances=1,
-            misfire_grace_time=3600,
-        )
+    # listings, 1 call per (date × market)). On *runtime* failure — invalid
+    # AUTH_KEY, network errors, or every fetch coming back empty — the wrapper
+    # automatically falls back to pykrx (per-symbol over date range).
+    # Without this fallback, an expired OpenAPI key would silently produce
+    # zero new bars while heartbeat reports OK, leaving gaps in the chart.
+
+    async def eod_sync_with_fallback() -> int:
+        if krx_openapi_client is not None and krx_openapi_client.configured:
+            result: OpenApiSyncResult = await sync_eod_watchlist_via_openapi(
+                krx_openapi_client, EOD_SYNC_LOOKBACK_DAYS
+            )
+            if result.successful_fetches > 0:
+                return result.rows_upserted
+            log.warning(
+                "eod_sync.openapi_failed_falling_back_to_pykrx",
+                auth_failures=result.auth_failures,
+                other_failures=result.other_failures,
+                note=(
+                    "KRX OpenAPI returned no successful fetches across the "
+                    "lookback window. Renew KRX_OPENAPI_KEY in .env to "
+                    "restore the primary path."
+                ),
+            )
+        per_symbol = await sync_eod_watchlist(kr_adapter, days=EOD_SYNC_LOOKBACK_DAYS)
+        return sum(per_symbol.values())
+
+    scheduler.add_job(
+        with_heartbeat(redis_client, "eod_sync_daily", eod_sync_with_fallback),
+        CronTrigger(hour=16, minute=0, timezone="Asia/Seoul"),
+        id="eod_sync_daily",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
 
     # Daily instrument-master refresh at 06:00 KST (well before market open).
     # Catches new listings and name changes. Idempotent UPSERT.

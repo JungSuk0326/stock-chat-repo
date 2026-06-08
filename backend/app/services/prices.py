@@ -58,10 +58,16 @@ async def sync_eod_prices(
         if not prices:
             return 0
 
+        # EOD daily bars come from KRX 정규장 (pykrx). NXT 1d bars are produced
+        # separately by `nxt_eod_aggregator`. Both `venue` in the row AND in
+        # the conflict spec are required — the prices PK is 4 columns
+        # (instrument_id, interval, venue, time); a 3-column conflict spec
+        # has no matching unique constraint and Postgres rejects the INSERT.
         rows = [
             {
                 "instrument_id": instrument.id,
                 "interval": interval,
+                "venue": "KRX",
                 "time": p.time,
                 "open": p.open,
                 "high": p.high,
@@ -74,7 +80,7 @@ async def sync_eod_prices(
 
         stmt = pg_insert(Price).values(rows)
         stmt = stmt.on_conflict_do_update(
-            index_elements=["instrument_id", "interval", "time"],
+            index_elements=["instrument_id", "interval", "venue", "time"],
             set_={
                 "open": stmt.excluded.open,
                 "high": stmt.excluded.high,

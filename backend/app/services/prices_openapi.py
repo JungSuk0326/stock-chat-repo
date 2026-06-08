@@ -18,6 +18,7 @@ If KRX_OPENAPI_KEY isn't set, the worker falls back to the pykrx-based
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, timedelta
 
 import structlog
@@ -33,6 +34,19 @@ from app.services.market.krx_openapi import (
     StockDailyRow,
     utc_midnight_of,
 )
+
+
+@dataclass
+class OpenApiSyncResult:
+    """Outcome of one EOD sweep. Used by the runner-side fallback to decide
+    whether the OpenAPI path actually worked or should silently route to
+    pykrx. `successful_fetches == 0` means every per-date call failed and
+    the caller should fall back."""
+
+    rows_upserted: int
+    auth_failures: int
+    other_failures: int
+    successful_fetches: int
 
 log = structlog.get_logger()
 
@@ -62,25 +76,29 @@ async def _watchlist_kr_symbol_map() -> dict[str, int]:
 async def sync_eod_watchlist_via_openapi(
     client: KrxOpenApiClient,
     lookback_days: int = 7,
-) -> int:
+) -> OpenApiSyncResult:
     """Daily sweep: fetch [today-lookback, today] for every market, filter
-    to watchlist, UPSERT. Returns the count of UPSERTed rows.
+    to watchlist, UPSERT. Returns a result with row + failure counts so the
+    caller can decide whether to fall back to pykrx.
 
     Idempotent (UPSERT). Misfire-safe — re-running picks up any holiday
     or worker-downtime gaps without manual intervention."""
     if not client.configured:
         log.info("eod_openapi.skip", reason="no_api_key")
-        return 0
+        return OpenApiSyncResult(0, 0, 0, 0)
 
     symbol_to_id = await _watchlist_kr_symbol_map()
     if not symbol_to_id:
         log.info("eod_openapi.skip", reason="empty_watchlist")
-        return 0
+        return OpenApiSyncResult(0, 0, 0, 0)
 
     end = date.today()
     start = end - timedelta(days=lookback_days)
 
     matched_rows: list[StockDailyRow] = []
+    auth_failures = 0
+    other_failures = 0
+    successful_fetches = 0
     # Iterate dates oldest → newest so logs make sense if a holiday in the
     # middle returns empty; we can still see the surrounding day worked.
     cur = start
@@ -90,15 +108,21 @@ async def sync_eod_watchlist_via_openapi(
                 rows = await client.fetch_stock_daily(cur, market)
             except KrxOpenApiError as exc:
                 # One failed market on one day shouldn't abort the whole
-                # sweep — log and keep going. R1 heartbeat captures
-                # repeated failures.
+                # sweep — log and keep going. Classify so the caller can
+                # tell "key is broken" (auth) from "transient network".
+                msg = str(exc)
+                if "401" in msg or "AUTH_KEY" in msg:
+                    auth_failures += 1
+                else:
+                    other_failures += 1
                 log.warning(
                     "eod_openapi.fetch_failed",
                     market=market,
                     date=str(cur),
-                    error=str(exc),
+                    error=msg,
                 )
                 continue
+            successful_fetches += 1
             if not rows:
                 # Weekend / holiday is the common reason. Don't spam.
                 continue
@@ -113,13 +137,21 @@ async def sync_eod_watchlist_via_openapi(
             start=str(start),
             end=str(end),
             watchlist_size=len(symbol_to_id),
+            auth_failures=auth_failures,
+            other_failures=other_failures,
+            successful_fetches=successful_fetches,
         )
-        return 0
+        return OpenApiSyncResult(0, auth_failures, other_failures, successful_fetches)
 
+    # KRX OpenAPI returns 정규장 trades only — venue="KRX". NXT bars come
+    # from `nxt_eod_aggregator`. The conflict spec must include `venue`
+    # because the prices PK is (instrument_id, interval, venue, time);
+    # a 3-column spec has no matching unique constraint and Postgres rejects.
     upsert_payload = [
         {
             "instrument_id": symbol_to_id[r.symbol],
             "interval": "1d",
+            "venue": "KRX",
             "time": utc_midnight_of(r.bas_dd),
             "open": r.open,
             "high": r.high,
@@ -133,7 +165,7 @@ async def sync_eod_watchlist_via_openapi(
     async with SessionLocal() as session:
         stmt = pg_insert(Price).values(upsert_payload)
         stmt = stmt.on_conflict_do_update(
-            index_elements=["instrument_id", "interval", "time"],
+            index_elements=["instrument_id", "interval", "venue", "time"],
             set_={
                 "open": stmt.excluded.open,
                 "high": stmt.excluded.high,
@@ -151,5 +183,13 @@ async def sync_eod_watchlist_via_openapi(
         end=str(end),
         rows=len(matched_rows),
         watchlist_size=len(symbol_to_id),
+        auth_failures=auth_failures,
+        other_failures=other_failures,
+        successful_fetches=successful_fetches,
     )
-    return len(matched_rows)
+    return OpenApiSyncResult(
+        rows_upserted=len(matched_rows),
+        auth_failures=auth_failures,
+        other_failures=other_failures,
+        successful_fetches=successful_fetches,
+    )

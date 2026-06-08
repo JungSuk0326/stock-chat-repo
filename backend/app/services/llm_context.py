@@ -69,6 +69,30 @@ class NewsHeadline:
 
 
 @dataclass
+class VolumeSummary:
+    """Daily-volume statistics derived from the 1y daily-bar series.
+
+    The LLM previously had only `current_volume_cum` (today's running
+    intraday total) — useless without a baseline. This adds the
+    averages + spike detection + recent timeline so questions like
+    "거래량 평소보다 많아?" / "최근 거래량 추이 어때?" can be answered
+    from context without a tool call.
+
+    All values are share counts (주); KR market data has no per-trade
+    KRW notional in our pipeline.
+    """
+
+    avg_1y: int                     # 1년 평균 일거래량
+    avg_20d: int                    # 20일 평균
+    avg_5d: int                     # 5일 평균
+    today_volume: int | None        # 오늘 거래량 (장중이면 누적 cum)
+    today_vs_20d_ratio: float | None  # today / avg_20d (1.0 = 평균, 2.0 = 2배 spike)
+    year_max_volume: int            # 1년 내 최대 거래량
+    year_max_date: str              # 최대 거래량일 (YYYY-MM-DD)
+    recent_7_days: list[tuple[str, int]]  # [(date, volume), ...] 최근 7거래일 (오래된→최근)
+
+
+@dataclass
 class InvestorFlowSummary:
     """Aggregated foreign/institutional/individual net buy over a window.
     Both cumulative (sum) and direction count (how many days net-buy vs
@@ -118,6 +142,7 @@ class LLMContext:
     recent_disclosures: list[DisclosureSummary] = field(default_factory=list)
     recent_news: list[NewsHeadline] = field(default_factory=list)
     investor_flow: InvestorFlowSummary | None = None
+    volume_summary: VolumeSummary | None = None
 
     def as_text(self) -> str:
         ccy = self.currency
@@ -158,6 +183,39 @@ class LLMContext:
             )
         lines.append(f"- 보유 일봉 수: {self.recent_bars_count}")
         lines.append("")
+
+        # 거래량 요약 — 1년 평균/20일/5일 + spike ratio + 최근 7일 시계열.
+        # 가격 통계와 분리해 따로 섹션을 두면 LLM이 "거래량 측면" 질문에
+        # 그 블록만 집어서 답하기 수월.
+        if self.volume_summary is not None:
+            vs = self.volume_summary
+            lines.append("### 거래량 (일봉 기준)")
+            lines.append(
+                f"- 평균: 1년 {_fmt_share_count(vs.avg_1y)} · "
+                f"20일 {_fmt_share_count(vs.avg_20d)} · "
+                f"5일 {_fmt_share_count(vs.avg_5d)}"
+            )
+            if vs.today_volume is not None and vs.today_vs_20d_ratio is not None:
+                spike_note = ""
+                if vs.today_vs_20d_ratio >= 2.0:
+                    spike_note = " — spike"
+                elif vs.today_vs_20d_ratio <= 0.5:
+                    spike_note = " — 부진"
+                lines.append(
+                    f"- 오늘: {_fmt_share_count(vs.today_volume)} "
+                    f"(20일 평균의 {vs.today_vs_20d_ratio:.2f}배{spike_note})"
+                )
+            lines.append(
+                f"- 1년 최대: {_fmt_share_count(vs.year_max_volume)} "
+                f"({vs.year_max_date})"
+            )
+            if vs.recent_7_days:
+                trail = " → ".join(
+                    f"{d[5:]}: {_fmt_share_count(v)}"
+                    for d, v in vs.recent_7_days
+                )
+                lines.append(f"- 최근 7일: {trail}")
+            lines.append("")
 
         # 2. 최근 공시 — 헤드라인만, 본문 X (CLAUDE.md 정책 + 토큰 예산)
         lines.append(
@@ -246,6 +304,18 @@ def _fmt_volume(n: int) -> str:
     return f"{sign}{abs_n}"
 
 
+def _fmt_share_count(n: int) -> str:
+    """Unsigned compact share count for absolute volume figures.
+    Distinct from `_fmt_volume` (signed net flows) so the LLM doesn't
+    see a "+" mark in front of plain daily-volume numbers and treat
+    it as direction."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.2f}M주"
+    if n >= 1_000:
+        return f"{n / 1_000:.0f}K주"
+    return f"{n:,}주"
+
+
 def _sma(values: list[Decimal], window: int) -> Decimal | None:
     if len(values) < window:
         return None
@@ -304,6 +374,9 @@ async def assemble_context(
         return None
 
     # Daily closes for trend + indicators (oldest first, recent last).
+    # venue="KRX" filter is required after the Top10 NXT split — otherwise
+    # the same trade-date appears twice (KRX + NXT) and indicators/year-
+    # high/low compute on a duplicated series.
     bars = (
         (
             await db.execute(
@@ -311,6 +384,7 @@ async def assemble_context(
                 .where(
                     Price.instrument_id == instrument.id,
                     Price.interval == "1d",
+                    Price.venue == "KRX",
                 )
                 .order_by(Price.time.asc())
             )
@@ -446,6 +520,43 @@ async def assemble_context(
             foreign_hold_ratio_latest=flow_rows[0].foreign_hold_ratio,
         )
 
+    # Volume summary (priority 1 — sits next to current price in CLAUDE.md
+    # priority list). Computed from the same `bars` we already loaded so
+    # there's no extra DB round-trip. Skipped when we have fewer than
+    # ~20 bars (avg_20d would be meaningless).
+    volume_summary: VolumeSummary | None = None
+    if len(bars) >= 5:
+        volumes = [int(b.volume) for b in bars]
+        avg_1y = sum(volumes) // len(volumes)
+        avg_20d = sum(volumes[-20:]) // min(20, len(volumes))
+        avg_5d = sum(volumes[-5:]) // min(5, len(volumes))
+        max_idx = max(range(len(volumes)), key=lambda i: volumes[i])
+        year_max_volume = volumes[max_idx]
+        year_max_date = bars[max_idx].time.strftime("%Y-%m-%d")
+        recent_7 = [
+            (b.time.strftime("%Y-%m-%d"), int(b.volume))
+            for b in bars[-7:]
+        ]
+
+        # Today's volume: prefer realtime cum (intraday) over last EOD bar
+        # so the spike ratio reflects the current trading day.
+        today_vol = current_volume_cum if current_volume_cum is not None else (
+            volumes[-1] if volumes else None
+        )
+        today_ratio = (
+            (today_vol / avg_20d) if (today_vol is not None and avg_20d > 0) else None
+        )
+        volume_summary = VolumeSummary(
+            avg_1y=avg_1y,
+            avg_20d=avg_20d,
+            avg_5d=avg_5d,
+            today_volume=today_vol,
+            today_vs_20d_ratio=today_ratio,
+            year_max_volume=year_max_volume,
+            year_max_date=year_max_date,
+            recent_7_days=recent_7,
+        )
+
     return LLMContext(
         canonical_id=f"{instrument.exchange}:{instrument.symbol}",
         name=instrument.name,
@@ -468,6 +579,7 @@ async def assemble_context(
         recent_disclosures=recent_disclosures,
         recent_news=recent_news,
         investor_flow=investor_flow,
+        volume_summary=volume_summary,
     )
 
 
